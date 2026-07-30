@@ -24,8 +24,12 @@ arms:
   - id: none
     balancer: null                 # unbiased routing, the floor
   - id: sign-sgd
-    balancer: sign
-    gamma: 1.0e-3                  # DeepSeek-V3 style fixed step
+    balancer: sign                 # DeepSeek-V3 style fixed step
+    # Swept, not fixed. QB has no learning rate, so pinning one gamma would rig the
+    # comparison — a badly-chosen step makes the baseline look worse than the method
+    # deserves. Each cell reports sign-SGD's *best* gamma, which is a tuning budget QB
+    # never gets.
+    gamma: [1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]
   - id: qb-exact
     balancer: quantile_balance_update
   - id: qb-histogram

@@ -44,10 +44,12 @@ a test asserts they agree — that equivalence is usually where the real content
 
 ```bash
 uv sync
-uv run pytest          # 59 tests, CPU, ~5s
+uv run pytest                      # 78 tests, CPU, ~2s
+uv run archlab ablate qb-scale     # the one ablation needing no training, ~80s
 ```
 
-Runs anywhere on CPU. A GPU box is for the ablations in `configs/ablations/`, not for the suite.
+Runs anywhere on CPU. A GPU box is for the four ablations that need training, not for the
+suite.
 
 ## What the tests are for
 
@@ -59,7 +61,8 @@ shapes. A few that earned their keep:
 - **Bounded decay keeps `1/Γ` finite** where the unbounded `-Softplus` baseline provably
   overflows — the numerical argument that unlocks dense Tensor Core tiles.
 - **Quantile Balancing beats sign-updates** at a matched step budget, and its exactness
-  **degrades under score ties** — a caveat the report leaves implicit.
+  **degrades under score ties** — a caveat the report leaves implicit, and one the
+  [`qb-scale`](docs/experiments/qb-scale.md) sweep showed gets worse as the expert pool grows.
 - **SiTU-GLU is bounded by β₁β₂ = 100**, matches SwiGLU near the origin, and recovers it as
   β→∞ — but its gradient *does* still underflow deep in saturation.
 
@@ -76,13 +79,22 @@ configs/ablations/*.yaml  one spec per open question (see docs/experiments/)
 docs/                     cross-cutting notes — see docs/README.md for the split
 ```
 
-## Open questions, specified
+## Open questions
 
-Five ablations are specified in [`configs/ablations/`](configs/ablations/), each targeting
-something the K3 report leaves unanswered — the per-component split of the 2.5x scaling claim,
-the unswept KDA:MLA ratio, where a fixed recurrent state saturates, what capping activations
-costs, and whether QB's edge widens with expert count. Configs only so far; the runner is not
-built. [`docs/experiments/`](docs/experiments/) has the contract and the reasoning.
+Five ablations in [`configs/ablations/`](configs/ablations/), each targeting something the K3
+report leaves unanswered — the per-component split of the 2.5x scaling claim, the unswept
+KDA:MLA ratio, where a fixed recurrent state saturates, what capping activations costs, and
+whether QB's edge widens with expert count.
+
+**One has run.** [`qb-scale`](docs/experiments/qb-scale.md) falsified its own hypothesis: QB's
+edge over sign updates *narrows* with expert count (149x at n=64 down to 39x at n=896) rather
+than widening. It also turned up something the spec did not anticipate — tie degradation
+compounds with `n`, and at 896 experts a saturated router defeats every balancer tested,
+including the offline solver. Router temperature is a precondition for balancing at that scale,
+not a free hyperparameter.
+
+The other four need a training loop that does not exist yet.
+[`docs/experiments/`](docs/experiments/) has the contract and the reasoning.
 
 ## Related
 
