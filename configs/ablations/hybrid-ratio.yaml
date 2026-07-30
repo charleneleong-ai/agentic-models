@@ -1,0 +1,58 @@
+# What is the real KDA:MLA tradeoff curve? K3 picks 3:1 and does not publish the sweep.
+#
+# KDA carries the sequence at constant memory but mixes lossily; MLA restores exact global
+# interaction at linear cache cost. The ratio sets where a model sits between them, and it is
+# the single most consequential number in the architecture. Nothing published sweeps it.
+#
+# Recall-sensitive evals are the point: val_loss alone will under-report what pure-KDA loses,
+# which is precisely the failure mode a fixed-size state should have.
+
+name: hybrid-ratio
+question: Where does lossy-but-cheap mixing stop being good enough?
+primitive: archlab.attention
+
+arms:                             # pattern repeats through the backbone
+  - id: all-mla
+    pattern: [mla]
+  - id: kda-1-1
+    pattern: [kda, mla]
+  - id: kda-3-1                   # K3's choice
+    pattern: [kda, kda, kda, mla]
+  - id: kda-7-1
+    pattern: [kda, kda, kda, kda, kda, kda, kda, mla]
+  - id: all-kda
+    pattern: [kda]
+
+model:
+  d_model: 256
+  n_layers: 24                    # divisible by 1, 2, 4, 8 so every pattern tiles evenly
+  n_heads: 8
+  d_head: 32
+  d_latent: 128                   # MLA compression, 0.5x per-head width as in K3
+  depth_mixing: block
+  n_blocks: 8
+  ffn: situ_glu
+  d_hidden: 1024
+  positional: none                # NoPE — position flows only through KDA decay
+
+train:
+  dataset: tinystories
+  seq_len: 1024
+  batch_size: 16
+  steps: 4000
+  lr: 3.0e-4
+  schedule: cosine
+  optimizer: muon
+  seeds: [0, 1]
+
+metrics:
+  primary: val_loss
+  also:
+    - needle_at_depth_acc         # exact recall — where a fixed state should fail first
+    - kv_cache_bytes_at_seq       # archlab.memory accounting, per arm
+    - tokens_per_sec
+
+# all-kda has no global-attention path, so NoPE leaves it position-blind beyond KDA's decay.
+# Expect it to fail recall hardest — that is the measurement, not a bug.
+
+report: docs/experiments/hybrid-ratio.md

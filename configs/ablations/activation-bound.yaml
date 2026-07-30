@@ -1,0 +1,62 @@
+# What does bounding the activation cost in quality, and does it buy low-precision stability?
+#
+# SiTU-GLU's justification is entirely about low precision: SwiGLU multiplies two unbounded
+# factors, and at MXFP4/MXFP8 the resulting outliers overflow. But a cap is a constraint, and
+# the report shows no quality comparison. Two things to separate:
+#
+#   (a) at BF16, does the cap cost anything? (if yes, it is a precision tax, not a free win)
+#   (b) at FP8, does the uncapped baseline actually destabilize? (the stated motivation)
+#
+# The beta sweep matters because K3's 4/25 are unexplained constants. Testing shows the smooth
+# cap's gradient still underflows deep in saturation, so small beta is not obviously safe.
+
+name: activation-bound
+question: Is the activation cap free at high precision, and load-bearing at low?
+primitive: archlab.activations.situ_glu
+
+arms:
+  - id: swiglu
+    activation: swiglu             # unbounded baseline
+  - id: situ-4-25
+    activation: situ_glu           # K3's constants
+    beta_gate: 4.0
+    beta_up: 25.0
+  - id: situ-2-8
+    activation: situ_glu           # tighter cap — more headroom, more constraint
+    beta_gate: 2.0
+    beta_up: 8.0
+  - id: situ-16-100
+    activation: situ_glu           # looser — should converge toward SwiGLU
+    beta_gate: 16.0
+    beta_up: 100.0
+
+precision: [bf16, fp8]             # crossed with every arm — the comparison that matters
+
+model:
+  d_model: 256
+  n_layers: 12
+  n_heads: 8
+  d_head: 32
+  attention: kda
+  d_hidden: 1024
+  depth_mixing: block
+  n_blocks: 4
+
+train:
+  dataset: tinystories
+  seq_len: 512
+  batch_size: 32
+  steps: 4000
+  lr: 3.0e-4
+  optimizer: muon
+  seeds: [0, 1, 2]
+
+metrics:
+  primary: val_loss
+  also:
+    - max_abs_activation           # should sit at beta_gate*beta_up for capped arms
+    - grad_norm_spike_count        # the instability SiTU-GLU claims to prevent
+    - saturated_unit_frac          # units past the cap, where gradient underflows
+    - nan_or_inf_steps
+
+report: docs/experiments/activation-bound.md

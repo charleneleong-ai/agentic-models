@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Ablation artefacts — regenerated from configs/ablations/*.yaml.
+# Anchored: unanchored `experiments/` also swallows docs/experiments/, which is committed.
+/experiments/
+logs/
+
+.DS_Store

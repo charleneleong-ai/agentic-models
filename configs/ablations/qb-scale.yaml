@@ -1,0 +1,47 @@
+# Does Quantile Balancing's advantage grow with expert count, as the report implies?
+#
+# The report's stated motivation for replacing sign-updates is that they equilibrate too
+# slowly "as LatentMoE increases the routed expert pool to 896 per layer". The unit tests
+# confirm QB wins at 128 experts; the claim is about the *trend*. If the gap does not widen
+# with n, the justification is weaker than stated.
+#
+# Runs without training — routing is a property of scores and bias alone, so this is a fast
+# CPU sweep over synthetic routers before any GPU time is spent.
+
+name: qb-scale
+question: Does the QB-vs-signSGD gap widen with expert count?
+primitive: archlab.moe.quantile_balance
+requires_training: false
+
+sweep:
+  n_experts: [64, 128, 256, 448, 896]
+  n_active: 16
+  n_tokens: 16384
+  router_scale: [0.15, 0.5, 1.0]   # 1.0 saturates the sigmoid — probes the tie degradation
+  popularity_skew: 0.25
+
+arms:
+  - id: none
+    balancer: null                 # unbiased routing, the floor
+  - id: sign-sgd
+    balancer: sign
+    gamma: 1.0e-3                  # DeepSeek-V3 style fixed step
+  - id: qb-exact
+    balancer: quantile_balance_update
+  - id: qb-histogram
+    balancer: histogram_quantile_bias
+    n_bins: 1000
+  - id: qb-alternating
+    balancer: alternating_qb_solve  # offline reference — the achievable ceiling
+    iters: 20
+
+steps: 8                           # update steps allowed to each balancer, matched budget
+
+metrics:
+  primary: load_imbalance          # max/mean expert load; 1.0 is perfect
+  also:
+    - steps_to_within_5pct
+    - dead_expert_count
+    - tie_fraction                 # scores at exactly 0.0/1.0 — explains saturated arms
+
+report: docs/experiments/qb-scale.md

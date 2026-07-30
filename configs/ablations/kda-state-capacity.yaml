@@ -1,0 +1,52 @@
+# How much can a fixed-size recurrent state actually hold before it saturates?
+#
+# KDA's selling point is memory constant in sequence length. The unasked question is what
+# that costs: a d_k x d_v state cannot store unbounded detail, so somewhere there is a
+# sequence length past which retrieval degrades. K3 reports 1M-context benchmarks, but
+# BrowseComp-style tasks tolerate approximate recall — they would not expose the ceiling.
+#
+# This measures the ceiling directly, sweeping state size against sequence length on a task
+# with no tolerance for approximation.
+
+name: kda-state-capacity
+question: Where does a fixed state stop holding the sequence?
+primitive: archlab.attention.kda
+
+sweep:
+  seq_len: [512, 2048, 8192, 32768]
+  d_head: [32, 64, 128]            # state is d_head x d_head per head — the capacity knob
+  n_heads: 8
+
+arms:
+  - id: kda-only
+    pattern: [kda]                 # isolates the recurrent state, no global-attention escape
+  - id: kda-3-1
+    pattern: [kda, kda, kda, mla]  # does one MLA layer per block rescue recall?
+
+task:
+  name: multi_needle_recall        # k facts inserted at controlled depths, all queried
+  n_needles: [1, 4, 16, 64]        # capacity pressure — the axis that should break it
+  depth_positions: [0.0, 0.25, 0.5, 0.75, 1.0]
+
+model:
+  d_model: 256
+  n_layers: 12
+  depth_mixing: block
+  n_blocks: 4
+  ffn: situ_glu
+
+train:
+  dataset: synthetic_recall
+  steps: 3000
+  lr: 3.0e-4
+  optimizer: muon
+  seeds: [0, 1]
+
+metrics:
+  primary: recall_acc
+  also:
+    - recall_acc_by_depth          # early-position decay is the expected failure signature
+    - recall_acc_by_n_needles
+    - state_bytes                  # archlab.memory.kda_state_bytes, for the cost axis
+
+report: docs/experiments/kda-state-capacity.md
