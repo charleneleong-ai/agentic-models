@@ -8,9 +8,10 @@ Each ablation exists to answer a question the paper leaves open. One YAML in
 > hypothesis; the third found its *falsifier* invalid — the corpus is depth-saturated, so no
 > depth ablation on it can mean anything.
 >
-> **Blocked:** the remaining depth/long-range work needs a corpus that rewards composition.
-> See [attn-res-depth.md](attn-res-depth.md#the-corpus-is-the-binding-constraint) — the gate is
-> a one-line check: does the residual baseline improve from 6 to 48 layers?
+> **Blocked:** the remaining depth/long-range work needs a corpus that is hard, learnable and
+> depth-sensitive at once. Two designs have now failed that bar for the same reason — see
+> [corpus-gate.md](corpus-gate.md). Validate any candidate with `archlab gate envelope` and
+> `archlab gate depth` *before* spending sweep time.
 
 ## The five
 
@@ -40,6 +41,19 @@ AttnRes's cost scales with depth rather than with sources attended (blocked at 4
 without stopping its growth — which suggests K3's blocking may be doing optimization work, not
 just the memory work §2.2 claims for it. ⛔ marks ablations blocked on the corpus fix.
 [Writeup](attn-res-depth.md).
+
+## Corpus gate
+
+Depth and long-range ablations are only meaningful on a corpus where the capability under test
+is actually learned. Two have failed that bar, for one shared reason: **requiring depth is not
+the same as inducing a model to use depth** ([corpus-gate.md](corpus-gate.md)).
+
+```bash
+archlab gate envelope          # is there a hard-but-learnable regime at all?
+archlab gate depth --chain-len 4   # does depth move the boundary?
+```
+
+Minutes, not the two GPU-hours `attn-res-depth` spent learning the same thing the slow way.
 
 ## Config contract
 

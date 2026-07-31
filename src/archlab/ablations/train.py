@@ -14,7 +14,7 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from archlab.data import CorpusSpec, batches
+from archlab.data import ChainSpec, CorpusSpec, batches, chain_batches
 from archlab.model import ModelSpec, NanoLM, losses
 
 
@@ -28,6 +28,18 @@ class TrainSpec:
     eval_batches: int = 8
     seed: int = 0
     device: str = "cpu"
+
+
+Corpus = CorpusSpec | ChainSpec
+
+
+def make_batches(
+    corpus: Corpus, batch_size: int, n_batches: int, seed: int
+) -> list[tuple[Tensor, Tensor]]:
+    """Dispatch on corpus type. Both yield (tokens, target_mask) so the loop is agnostic."""
+    if isinstance(corpus, ChainSpec):
+        return chain_batches(corpus, batch_size, n_batches, seed)
+    return batches(corpus, batch_size, n_batches, seed)
 
 
 def lr_at(step: int, spec: TrainSpec) -> float:
@@ -62,8 +74,8 @@ def train_arm(model_spec: ModelSpec, train_spec: TrainSpec, corpus: CorpusSpec) 
     )
 
     # Identical data for every arm: same corpus seed, same batch order.
-    train_data = batches(corpus, train_spec.batch_size, train_spec.steps, seed=train_spec.seed)
-    eval_data = batches(corpus, train_spec.batch_size, train_spec.eval_batches, seed=99991)
+    train_data = make_batches(corpus, train_spec.batch_size, train_spec.steps, train_spec.seed)
+    eval_data = make_batches(corpus, train_spec.batch_size, train_spec.eval_batches, 99991)
 
     peak_sources, curve = 0, []
     for step, (tokens, mask) in enumerate(train_data):

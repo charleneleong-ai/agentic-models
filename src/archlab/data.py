@@ -117,3 +117,124 @@ def batches(
 ) -> list[tuple[Tensor, Tensor]]:
     """Pre-generate the whole run so every arm sees byte-identical data."""
     return [generate(spec, batch_size, seed=seed * 100_000 + i) for i in range(n_batches)]
+
+
+# ---------------------------------------------------------------------------
+# Compositional corpus
+# ---------------------------------------------------------------------------
+#
+# The recall corpus above is depth-saturated: `attn-res-depth` measured an 8x depth increase
+# changing the residual baseline by +0.006, in the wrong direction. Markov filler is learnable
+# in a couple of layers and the planted-recall task was never learned at all, so nothing in
+# between rewards composition — which makes any depth ablation on it meaningless.
+#
+# This corpus is built so that depth is *required*, not merely permitted. A chain
+#
+#     [CHAIN] x0 f_a f_b ... f_z [ANSWER] y        with  y = f_z(...f_b(f_a(x0)))
+#
+# gives the answer only after `chain_len` sequential function applications. Each application
+# depends on the previous result, so the computation cannot be flattened: a model gets roughly
+# one composition step per layer, and a network shallower than the chain has to guess.
+#
+# The functions are arbitrary maps rather than permutations, which blocks the shortcut of
+# learning a group structure and composing analytically. They are fixed per corpus seed, so
+# they are part of the language rather than per-sequence noise — learnable, but only by
+# actually composing.
+#
+# Intermediate results are never emitted. Emitting them would let a 1-layer model chain
+# stepwise across positions and would destroy the depth requirement entirely.
+
+CHAIN_TOKEN, ANSWER_TOKEN = 0, 1
+
+
+@dataclass(frozen=True)
+class ChainSpec:
+    """A corpus whose targets require `chain_len` sequential compositions to predict."""
+
+    vocab_size: int = 64
+    seq_len: int = 256
+    n_states: int = 16
+    n_funcs: int = 8
+    chain_len: int = 8
+    n_chains: int = 3
+    zipf_alpha: float = 1.2
+    seed: int = 0
+
+    @property
+    def width(self) -> int:
+        """Tokens one chain occupies: [CHAIN] x0 f... [ANSWER] y."""
+        return self.chain_len + 4
+
+    @property
+    def n_filler(self) -> int:
+        return self.vocab_size - N_SPECIAL - self.n_states - self.n_funcs
+
+    @property
+    def state_base(self) -> int:
+        return N_SPECIAL
+
+    @property
+    def func_base(self) -> int:
+        return N_SPECIAL + self.n_states
+
+    @property
+    def filler_base(self) -> int:
+        return N_SPECIAL + self.n_states + self.n_funcs
+
+
+def function_table(spec: ChainSpec) -> Tensor:
+    """(n_funcs, n_states) arbitrary maps — fixed per corpus, so they are learnable."""
+    g = torch.Generator().manual_seed(spec.seed + 7919)
+    return torch.randint(spec.n_states, (spec.n_funcs, spec.n_states), generator=g)
+
+
+def filler_chain(spec: ChainSpec) -> Tensor:
+    g = torch.Generator().manual_seed(spec.seed)
+    n = spec.n_filler
+    zipf = torch.arange(1, n + 1, dtype=torch.float) ** -spec.zipf_alpha
+    return torch.softmax(torch.rand(n, n, generator=g) * 2.0 + zipf.log().unsqueeze(0), dim=-1)
+
+
+def generate_chains(spec: ChainSpec, n_seqs: int, seed: int | None = None) -> tuple[Tensor, Tensor]:
+    """Return (tokens, target_mask). The mask marks answer positions only."""
+    g = torch.Generator().manual_seed(spec.seed if seed is None else seed)
+    funcs = function_table(spec)
+    trans = filler_chain(spec)
+
+    cells = spec.seq_len // spec.width
+    if cells < spec.n_chains:
+        raise ValueError(
+            f"n_chains={spec.n_chains} of width {spec.width} needs seq_len >= "
+            f"{spec.n_chains * spec.width}, got {spec.seq_len}"
+        )
+
+    tokens = torch.empty(n_seqs, spec.seq_len, dtype=torch.long)
+    state = torch.randint(spec.n_filler, (n_seqs,), generator=g)
+    for t in range(spec.seq_len):
+        tokens[:, t] = state + spec.filler_base
+        state = torch.multinomial(trans[state], 1, generator=g).squeeze(-1)
+
+    mask = torch.zeros(n_seqs, spec.seq_len, dtype=torch.bool)
+    for i in range(n_seqs):
+        # Strided cells, so chains cannot overlap and clobber one another's answers.
+        for cell in torch.randperm(cells, generator=g)[: spec.n_chains]:
+            start = int(cell) * spec.width
+            x = int(torch.randint(spec.n_states, (1,), generator=g))
+            picks = torch.randint(spec.n_funcs, (spec.chain_len,), generator=g)
+
+            tokens[i, start] = CHAIN_TOKEN
+            tokens[i, start + 1] = spec.state_base + x
+            for j, f in enumerate(picks):
+                tokens[i, start + 2 + j] = spec.func_base + int(f)
+                x = int(funcs[int(f), x])  # compose; intermediates are never emitted
+            tokens[i, start + 2 + spec.chain_len] = ANSWER_TOKEN
+            tokens[i, start + 3 + spec.chain_len] = spec.state_base + x
+            mask[i, start + 3 + spec.chain_len] = True
+
+    return tokens, mask
+
+
+def chain_batches(
+    spec: ChainSpec, batch_size: int, n_batches: int, seed: int
+) -> list[tuple[Tensor, Tensor]]:
+    return [generate_chains(spec, batch_size, seed=seed * 100_000 + i) for i in range(n_batches)]
