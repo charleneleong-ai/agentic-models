@@ -8,6 +8,9 @@ Each ablation exists to answer a question the paper leaves open. One YAML in
 > hypothesis; the third found its *falsifier* invalid — the corpus is depth-saturated, so no
 > depth ablation on it can mean anything.
 >
+> [`activation-bound`](activation-bound.md) also ran — it needs no depth-sensitivity, so the
+> corpus problem does not touch it. Both its questions came back negative at nano scale.
+>
 > **Blocked:** the remaining depth/long-range work needs a corpus that is hard, learnable and
 > depth-sensitive at once. Two designs have now failed that bar for the same reason — see
 > [corpus-gate.md](corpus-gate.md). Validate any candidate with `archlab gate envelope` and
@@ -20,7 +23,7 @@ Each ablation exists to answer a question the paper leaves open. One YAML in
 | [`attn-res`](../../configs/ablations/attn-res.yaml) **· [run →](attn-res.md)** | How much of the 2.5x is the depth axis alone? | The report credits KDA + AttnRes + LatentMoE *jointly* and publishes no per-component ablation | yes |
 | [`hybrid-ratio`](../../configs/ablations/hybrid-ratio.yaml) | Where does the KDA:MLA tradeoff actually sit? | 3:1 is asserted, never swept — anywhere | yes |
 | [`kda-state-capacity`](../../configs/ablations/kda-state-capacity.yaml) ⛔ | When does a fixed state stop holding the sequence? | 1M benchmarks tolerate approximate recall, so they cannot expose the ceiling | yes |
-| [`activation-bound`](../../configs/ablations/activation-bound.yaml) | Is capping activations free at BF16, load-bearing at FP8? | SiTU-GLU is justified on precision grounds with no quality comparison shown | yes |
+| [`activation-bound`](../../configs/ablations/activation-bound.yaml) **· [run →](activation-bound.md)** | Is capping activations free at BF16, load-bearing at FP8? | SiTU-GLU is justified on precision grounds with no quality comparison shown | yes |
 | [`qb-scale`](../../configs/ablations/qb-scale.yaml) **· [run →](qb-scale.md)** | Does QB's edge over sign-updates widen with expert count? | The stated motivation is about the trend toward 896 experts, not a single point | **no** |
 
 `qb-scale` ran first because routing depends only on scores and bias — no training, 77 s on
@@ -41,6 +44,13 @@ AttnRes's cost scales with depth rather than with sources attended (blocked at 4
 without stopping its growth — which suggests K3's blocking may be doing optimization work, not
 just the memory work §2.2 claims for it. ⛔ marks ablations blocked on the corpus fix.
 [Writeup](attn-res-depth.md).
+
+`activation-bound` tested SiTU-GLU's precision rationale and found it **inert at this scale**:
+peak activation 87.5 against `e4m3`'s 448 ceiling, zero overflows, and FP8-range quantization
+shifting loss less than seed noise despite injecting 2.3% error per activation. The cap neither
+costs nor buys measurable quality. The one robust finding is that a cap which *engages* raises
+seed variance ~10x — the opposite of the stabilising role the report describes.
+[Writeup](activation-bound.md).
 
 ## Corpus gate
 
@@ -89,11 +99,21 @@ description.
 ## Runner
 
 `archlab ablate <name> [--device cuda]` runs any ablation with a registered runner
-([`archlab/cli.py`](../../src/archlab/cli.py)). Two exist: `qb-scale` (no training) and
-`attn-res`, which uses the shared [training loop](../../src/archlab/ablations/train.py) and
-[model assembler](../../src/archlab/model.py).
+([`archlab/cli.py`](../../src/archlab/cli.py)). Four exist:
 
-The remaining three need only their own runner — the assembler already covers their arms.
+| runner | training? | notes |
+|---|---|---|
+| `qb-scale` | no | routing depends only on scores and bias — CPU, 77 s |
+| `attn-res` | yes | shared [training loop](../../src/archlab/ablations/train.py) + [model assembler](../../src/archlab/model.py) |
+| `attn-res-depth` | yes | crosses the arms with `sweep.n_layers` |
+| `activation-bound` | yes | adds activation probes and simulated FP8 |
+
+Two configs still lack one — [`hybrid-ratio`](../../configs/ablations/hybrid-ratio.yaml) and
+[`kda-state-capacity`](../../configs/ablations/kda-state-capacity.yaml) — and the assembler
+already covers their arms, so each needs only its own runner. Both are blocked on the corpus
+question first: `kda-state-capacity` shares the dead recall metric outright, and
+`hybrid-ratio`'s whole point is long-range recall, which nothing has yet learned.
+
 Layout:
 
 ```

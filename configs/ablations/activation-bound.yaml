@@ -1,62 +1,84 @@
-# What does bounding the activation cost in quality, and does it buy low-precision stability?
+# What does bounding the activation cost, and does it buy low-precision stability?
 #
-# SiTU-GLU's justification is entirely about low precision: SwiGLU multiplies two unbounded
-# factors, and at MXFP4/MXFP8 the resulting outliers overflow. But a cap is a constraint, and
-# the report shows no quality comparison. Two things to separate:
+# SiTU-GLU's justification in K3 §2.3.2 is entirely about precision: SwiGLU multiplies two
+# unbounded factors, so coincident large coordinates compound into outliers, and at MXFP4
+# weights / MXFP8 activations an outlier is an overflow. SiTU-GLU bounds output at b1*b2 = 100.
+# The report shows no quality comparison, and never measures whether the unbounded baseline
+# actually overflows.
 #
-#   (a) at BF16, does the cap cost anything? (if yes, it is a precision tax, not a free win)
-#   (b) at FP8, does the uncapped baseline actually destabilize? (the stated motivation)
+# Two questions that need separating:
+#   (a) at bf16, does the cap cost anything?     -> if yes, it is a precision tax, not a free win
+#   (b) under FP8-range activations, does the unbounded baseline break?  -> the stated motivation
 #
-# The beta sweep matters because K3's 4/25 are unexplained constants. Testing shows the smooth
-# cap's gradient still underflows deep in saturation, so small beta is not obviously safe.
+# The beta sweep matters because K3's 4/25 are unexplained constants, and testing showed the
+# smooth cap's gradient still underflows deep in saturation — so a tighter cap is not obviously
+# safe.
+#
+# PRECISION IS SIMULATED. The A100 is sm_80: float8 dtypes and casts work, but torch._scaled_mm
+# needs sm_90, so real FP8 matmuls are unavailable. `fp8_sim` fake-quantizes activations through
+# e4m3 (cast down and back), reproducing the format's range and precision exactly while the
+# arithmetic stays in bf16. That is faithful for the numerical question and says nothing about
+# throughput — no speed conclusion may be drawn from it. Measured: the cast saturates at 448
+# rather than producing NaN, so overflow is silent information loss.
 
 name: activation-bound
 question: Is the activation cap free at high precision, and load-bearing at low?
 primitive: archlab.activations.situ_glu
+requires_training: true
 
 arms:
   - id: swiglu
     activation: swiglu             # unbounded baseline
   - id: situ-4-25
-    activation: situ_glu           # K3's constants
+    activation: situ_glu           # K3's constants; bound = 100
     beta_gate: 4.0
     beta_up: 25.0
   - id: situ-2-8
-    activation: situ_glu           # tighter cap — more headroom, more constraint
+    activation: situ_glu           # tighter cap = 16; more headroom, more constraint
     beta_gate: 2.0
     beta_up: 8.0
   - id: situ-16-100
-    activation: situ_glu           # looser — should converge toward SwiGLU
+    activation: situ_glu           # looser cap = 1600, above e4m3's 448 ceiling
     beta_gate: 16.0
     beta_up: 100.0
 
-precision: [bf16, fp8]             # crossed with every arm — the comparison that matters
+precision: [bf16, fp8_sim]         # crossed with every arm — the comparison that matters
 
 model:
   d_model: 256
   n_layers: 12
   n_heads: 8
   d_head: 32
-  attention: kda
   d_hidden: 1024
-  depth_mixing: block
+  attention: kda
+  chunk_size: 64
+  depth_mixing: block              # cheapest depth mixer; this ablation is not about depth
   n_blocks: 4
+  # NOTE: the FFN sits behind an RMSNorm, so its input is unit-scale regardless of the residual
+  # stream. Outliers can only come from learned weight magnitudes — which is why this needs real
+  # training and cannot be provoked by inflating inputs.
+
+corpus:
+  vocab_size: 64                   # recall corpus: this ablation asks nothing about depth,
+  seq_len: 256                     # it only needs a learnable signal (local baseline ~2.79)
+  n_pairs: 4
+  key_vocab: 16
 
 train:
-  dataset: tinystories
-  seq_len: 512
-  batch_size: 32
-  steps: 4000
+  steps: 1200                      # longer than the depth ablations: outliers need weights to grow
+  batch_size: 16
   lr: 3.0e-4
-  optimizer: muon
-  seeds: [0, 1, 2]
+  schedule: cosine
+  warmup_frac: 0.02
+  weight_decay: 0.1
+  seeds: [0, 1]
 
 metrics:
-  primary: val_loss
+  primary: val_local_loss
   also:
     - max_abs_activation           # should sit at beta_gate*beta_up for capped arms
-    - grad_norm_spike_count        # the instability SiTU-GLU claims to prevent
-    - saturated_unit_frac          # units past the cap, where gradient underflows
-    - nan_or_inf_steps
+    - fp8_overflow_frac            # fraction above e4m3's 448 — the claimed failure mode
+    - grad_norm_spikes             # the instability SiTU-GLU claims to prevent
+    - nonfinite_steps
 
 report: docs/experiments/activation-bound.md

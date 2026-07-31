@@ -21,6 +21,7 @@ from archlab.attention.kda import KDA
 from archlab.attention.mla import MLA
 from archlab.depth.attn_res import BlockAttnRes, FullAttnRes
 from archlab.depth.residual import ResidualStack
+from archlab.precision import ActivationStats, Quantizer, identity, quantizer_for
 
 
 @dataclass
@@ -37,6 +38,9 @@ class ModelSpec:
     n_blocks: int = 4
     ffn: str = "situ_glu"
     chunk_size: int = 32
+    precision: str = "bf16"
+    beta_gate: float = 4.0
+    beta_up: float = 25.0
 
 
 class SwiGLU(nn.Module):
@@ -47,9 +51,17 @@ class SwiGLU(nn.Module):
         self.gate_proj = nn.Linear(d_model, d_hidden, bias=False)
         self.up_proj = nn.Linear(d_model, d_hidden, bias=False)
         self.down_proj = nn.Linear(d_hidden, d_model, bias=False)
+        self.quantize: Quantizer = identity
+        self.stats: ActivationStats | None = None
+
+    def hidden(self, x: Tensor) -> Tensor:
+        return nn.functional.silu(self.gate_proj(x)) * self.up_proj(x)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.down_proj(nn.functional.silu(self.gate_proj(x)) * self.up_proj(x))
+        h = self.hidden(x)
+        if self.stats is not None:
+            self.stats.observe(h)  # measured *before* quantization — the true magnitude
+        return self.down_proj(self.quantize(h))
 
 
 class Attention(nn.Module):
@@ -85,8 +97,13 @@ class Block(nn.Module):
         self.attn_norm = nn.RMSNorm(spec.d_model)
         self.attn = Attention(kind, spec)
         self.ffn_norm = nn.RMSNorm(spec.d_model)
-        ffn_cls = {"situ_glu": SiTUGLU, "swiglu": SwiGLU}[spec.ffn]
-        self.ffn = ffn_cls(spec.d_model, spec.d_hidden)
+        if spec.ffn == "situ_glu":
+            self.ffn = SiTUGLU(spec.d_model, spec.d_hidden, spec.beta_gate, spec.beta_up)
+        elif spec.ffn == "swiglu":
+            self.ffn = SwiGLU(spec.d_model, spec.d_hidden)
+        else:
+            raise ValueError(f"unknown ffn: {spec.ffn!r} (expected 'situ_glu' or 'swiglu')")
+        self.ffn.quantize = quantizer_for(spec.precision)
 
     def forward(self, h: Tensor) -> Tensor:
         a = self.attn(self.attn_norm(h))
@@ -128,6 +145,18 @@ class NanoLM(nn.Module):
     def peak_live_sources(self) -> int:
         """What the depth mixer retains — the memory axis AttnRes trades quality against."""
         return self.depth.live_sources()
+
+    def attach_activation_probes(self) -> ActivationStats:
+        """Share one accumulator across every FFN.
+
+        Pooled deliberately: the failure SiTU-GLU guards against is a *rare* coincident outlier
+        anywhere in the network, so the quantity of interest is the network-wide maximum, not a
+        per-layer average that would dilute it.
+        """
+        stats = ActivationStats()
+        for layer in self.layers:
+            layer.ffn.stats = stats
+        return stats
 
 
 def losses(logits: Tensor, tokens: Tensor, answer_mask: Tensor) -> tuple[Tensor, Tensor]:

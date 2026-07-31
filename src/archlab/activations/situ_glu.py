@@ -29,6 +29,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from archlab.precision import ActivationStats, Quantizer, identity
+
 BETA_GATE = 4.0
 BETA_UP = 25.0
 
@@ -64,7 +66,14 @@ class SiTUGLU(nn.Module):
         self.gate_proj = nn.Linear(d_model, d_hidden, bias=bias)
         self.up_proj = nn.Linear(d_model, d_hidden, bias=bias)
         self.down_proj = nn.Linear(d_hidden, d_model, bias=bias)
+        self.quantize: Quantizer = identity
+        self.stats: ActivationStats | None = None
+
+    def hidden(self, x: Tensor) -> Tensor:
+        return situ_glu(self.gate_proj(x), self.up_proj(x), self.beta_gate, self.beta_up)
 
     def forward(self, x: Tensor) -> Tensor:
-        h = situ_glu(self.gate_proj(x), self.up_proj(x), self.beta_gate, self.beta_up)
-        return self.down_proj(h)
+        h = self.hidden(x)
+        if self.stats is not None:
+            self.stats.observe(h)  # measured *before* quantization — the true magnitude
+        return self.down_proj(self.quantize(h))
