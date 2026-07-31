@@ -1,0 +1,70 @@
+# Does the AttnRes deficit shrink with depth?
+#
+# attn-res found the plain residual beating every AttnRes arm at 12 layers, with loss monotone
+# in sources attended. The obvious confound is depth itself: AttnRes is a mechanism for
+# *reaching across depth*, and 12 layers may simply not have enough to reach across. K3 runs 93.
+#
+# The measured quantity is therefore the GAP (attnres - residual) at each depth, not the loss.
+# Absolute loss falls with depth for every arm, so comparing losses across depths says nothing.
+# The gap is matched-within-depth and is what has to move.
+#
+#   gap shrinks or reverses with depth -> the nano result is a depth artifact, K3's claim
+#                                          survives cleanly, and the question becomes "how deep
+#                                          before it pays?"
+#   gap flat or widening               -> depth is not the confound, and something else
+#                                          about this setup or the mechanism is responsible
+#
+# Block size is held at 6 rather than block *count*, so n_blocks scales 1/2/4/8 with depth and
+# the deepest arm lands exactly on K3's 8-block configuration (§2.2). At 6 layers a single
+# block is degenerate — recorded, not hidden.
+
+name: attn-res-depth
+question: Does the AttnRes deficit shrink as depth grows toward K3's 93 layers?
+primitive: archlab.depth.attn_res
+requires_training: true
+
+sweep:
+  n_layers: [6, 12, 24, 48]
+
+arms:
+  - id: residual
+    depth_mixing: residual
+  - id: attnres-full
+    depth_mixing: full
+  - id: attnres-block-6
+    depth_mixing: block
+    block_size: 6                  # n_blocks = n_layers / 6 -> 1, 2, 4, 8
+
+model:
+  d_model: 128                     # held fixed; only depth varies
+  n_heads: 4
+  d_head: 32
+  d_hidden: 512
+  attention: kda
+  chunk_size: 64
+  ffn: situ_glu
+
+corpus:
+  vocab_size: 64
+  seq_len: 256
+  n_pairs: 4
+  key_vocab: 16
+
+train:
+  steps: 600                       # attn-res showed the ordering settles by ~step 60
+  batch_size: 16
+  lr: 3.0e-4
+  schedule: cosine
+  warmup_frac: 0.02
+  weight_decay: 0.1
+  seeds: [0, 1]                    # AttnRes seed spread was 136x the baseline's — 1 seed is unsafe
+
+metrics:
+  primary: gap_vs_residual         # (arm local loss) - (residual local loss), same depth+seed
+  also:
+    - val_local_loss
+    - val_recall_loss              # expected to stay dead; see attn-res.md
+    - n_params
+    - peak_live_sources
+
+report: docs/experiments/attn-res-depth.md

@@ -7,11 +7,15 @@ from pathlib import Path
 
 import typer
 
-from archlab.ablations import attn_res, qb_scale
+from archlab.ablations import attn_res, depth_sweep, qb_scale
 
 app = typer.Typer(add_completion=False, help=__doc__)
 
-RUNNERS = {"qb-scale": qb_scale.run, "attn-res": attn_res.run}
+RUNNERS = {
+    "qb-scale": qb_scale.run,
+    "attn-res": attn_res.run,
+    "attn-res-depth": depth_sweep.run,
+}
 
 
 @app.callback()

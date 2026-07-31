@@ -3,9 +3,14 @@
 Each ablation exists to answer a question the paper leaves open. One YAML in
 [`configs/ablations/`](../../configs/ablations/), one writeup here, same stem.
 
-> **Status:** [`qb-scale`](qb-scale.md) and [`attn-res`](attn-res.md) have run. The training
-> loop now exists, so the remaining three need only their own runner. Both completed ablations
-> falsified their own hypothesis — written down before running, which is the point.
+> **Status:** [`qb-scale`](qb-scale.md), [`attn-res`](attn-res.md) and
+> [`attn-res-depth`](attn-res-depth.md) have run. The first two falsified their own
+> hypothesis; the third found its *falsifier* invalid — the corpus is depth-saturated, so no
+> depth ablation on it can mean anything.
+>
+> **Blocked:** the remaining depth/long-range work needs a corpus that rewards composition.
+> See [attn-res-depth.md](attn-res-depth.md#the-corpus-is-the-binding-constraint) — the gate is
+> a one-line check: does the residual baseline improve from 6 to 48 layers?
 
 ## The five
 
@@ -13,7 +18,7 @@ Each ablation exists to answer a question the paper leaves open. One YAML in
 |---|---|---|---|
 | [`attn-res`](../../configs/ablations/attn-res.yaml) **· [run →](attn-res.md)** | How much of the 2.5x is the depth axis alone? | The report credits KDA + AttnRes + LatentMoE *jointly* and publishes no per-component ablation | yes |
 | [`hybrid-ratio`](../../configs/ablations/hybrid-ratio.yaml) | Where does the KDA:MLA tradeoff actually sit? | 3:1 is asserted, never swept — anywhere | yes |
-| [`kda-state-capacity`](../../configs/ablations/kda-state-capacity.yaml) | When does a fixed state stop holding the sequence? | 1M benchmarks tolerate approximate recall, so they cannot expose the ceiling | yes |
+| [`kda-state-capacity`](../../configs/ablations/kda-state-capacity.yaml) ⛔ | When does a fixed state stop holding the sequence? | 1M benchmarks tolerate approximate recall, so they cannot expose the ceiling | yes |
 | [`activation-bound`](../../configs/ablations/activation-bound.yaml) | Is capping activations free at BF16, load-bearing at FP8? | SiTU-GLU is justified on precision grounds with no quality comparison shown | yes |
 | [`qb-scale`](../../configs/ablations/qb-scale.yaml) **· [run →](qb-scale.md)** | Does QB's edge over sign-updates widen with expert count? | The stated motivation is about the trend toward 896 experts, not a single point | **no** |
 
@@ -25,8 +30,16 @@ saturated router defeats every balancer tested. [Writeup](qb-scale.md).
 `attn-res` also came out negative: at 12 layers the plain residual stream beats every AttnRes
 arm, and loss rises monotonically with the number of sources attended over. The tidy
 explanation — that untrained pseudo-queries average rather than select — was measured and
-**refuted**; they do become selective. That does not refute K3 (12 layers against 93), but it
-does show the benefit is not scale-free. [Writeup](attn-res.md).
+**refuted**; they do become selective. [Writeup](attn-res.md).
+
+`attn-res-depth` swept 6/12/24/48 layers to test whether that was a depth artifact, and found
+the question unanswerable: **an 8x depth increase changes the baseline loss by +0.006**, so the
+corpus rewards no depth at all and a depth mechanism can only pay. It did establish that
+AttnRes's cost scales with depth rather than with sources attended (blocked at 48 layers costs
+5.5x more than full at 6, on comparable source counts), and that blocking cuts the cost ~3x
+without stopping its growth — which suggests K3's blocking may be doing optimization work, not
+just the memory work §2.2 claims for it. ⛔ marks ablations blocked on the corpus fix.
+[Writeup](attn-res-depth.md).
 
 ## Config contract
 
