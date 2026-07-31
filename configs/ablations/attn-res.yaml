@@ -1,54 +1,66 @@
-# Does attention-over-depth beat a plain residual stream, at equal parameters?
+# Does attention-over-depth beat a plain residual stream, at matched width and depth?
 #
-# The K3 report credits ~2.5x scaling efficiency to AttnRes + LatentMoE + KDA jointly and
-# gives no per-component ablation. This isolates the depth axis: same width, same depth, same
-# attention core — only the inter-layer connection changes.
+# The K3 report credits ~2.5x scaling efficiency to AttnRes + LatentMoE + KDA jointly and gives
+# no per-component ablation. This isolates the depth axis: same width, same depth, same
+# attention core, same activation — only the inter-layer connection changes.
 #
-# The blocked arm matters as much as the full one. If block=8 matches full, the report's
-# "N ~ 8 recovers most of the benefit" claim replicates and the O(Nd) memory bound is free.
+# The blocked arm matters as much as the full one. If block=4 matches full, the report's
+# "N ~ 8 recovers most of the benefit" claim replicates in miniature and the O(Nd) memory bound
+# comes free. If block=2 underperforms, that bounds how far the approximation stretches.
+#
+# Corpus is synthetic and self-contained (see archlab/data.py) rather than TinyStories: a known
+# generative process makes a loss delta interpretable, and it keeps the repo runnable on CPU
+# with no network. Local and long-range losses are reported separately — aggregate loss hides
+# which capability an arm actually bought.
 
 name: attn-res
-question: How much of the gain is the depth axis alone?
+question: How much of the 2.5x is the depth axis alone?
 primitive: archlab.depth.attn_res
+requires_training: true
 
 arms:
   - id: residual
-    depth_mixing: residual        # baseline: h_l = h_{l-1} + f(h_{l-1})
+    depth_mixing: residual         # baseline: h <- h + f(h), uniform and irrevocable
   - id: attnres-full
-    depth_mixing: full            # Eq. 8-9, O(Ld) memory
-  - id: attnres-block-8
-    depth_mixing: block           # Eq. 10, O(Nd) memory
-    n_blocks: 8
+    depth_mixing: full             # Eq. 8-9, retains O(L) sources
+  - id: attnres-block-4
+    depth_mixing: block            # Eq. 10, retains O(N)
+    n_blocks: 4
   - id: attnres-block-2
-    depth_mixing: block           # too few blocks — expected to underperform
+    depth_mixing: block            # coarser blocking — where does the approximation break?
     n_blocks: 2
 
 model:
-  d_model: 256
-  n_layers: 24
-  n_heads: 8
+  d_model: 128
+  n_layers: 12                     # divides by both 4 and 2 blocks
+  n_heads: 4
   d_head: 32
-  attention: kda                  # held fixed; the hybrid ratio is a separate ablation
+  d_hidden: 512
+  attention: kda                   # held fixed; the hybrid ratio is its own ablation
+  chunk_size: 64                   # measured 1.7x faster than 32 on A100; output is
+                                   # chunk-invariant, so this is pure throughput
   ffn: situ_glu
-  d_hidden: 1024
+
+corpus:
+  vocab_size: 64
+  seq_len: 256
+  n_pairs: 4                       # key/value pairs planted early, queried late
+  key_vocab: 16
 
 train:
-  dataset: tinystories
-  seq_len: 512
-  batch_size: 32
-  steps: 4000
+  steps: 600
+  batch_size: 16
   lr: 3.0e-4
-  schedule: cosine                # K3 §3.2 found cosine beats WSD under per-schedule tuning
-  warmup_frac: 0.01
+  schedule: cosine                 # K3 §3.2: beats WSD when both are tuned
+  warmup_frac: 0.02
   weight_decay: 0.1
-  optimizer: muon
-  seeds: [0, 1, 2]                # depth-mixing deltas are small; report mean +/- spread
+  seeds: [0, 1]                    # depth-mixing deltas are small; report spread, not a point
 
 metrics:
-  primary: val_loss
+  primary: val_local_loss
   also:
-    - tokens_per_sec
-    - peak_memory_bytes           # the O(Ld) vs O(Nd) claim, measured
-    - live_sources_peak           # from BlockAttnRes.live_sources()
+    - val_recall_loss              # the long-range half — where depth mixing should matter most
+    - n_params                     # AttnRes adds n_layers*d_model; check it is not buying capacity
+    - peak_live_sources            # 1 vs O(N) vs O(L) — the memory AttnRes trades against
 
 report: docs/experiments/attn-res.md
