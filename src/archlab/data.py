@@ -370,3 +370,20 @@ def dyck_batches(
     spec: DyckSpec, batch_size: int, n_batches: int, seed: int
 ) -> list[tuple[Tensor, Tensor]]:
     return [generate_dyck(spec, batch_size, seed=seed * 100_000 + i) for i in range(n_batches)]
+
+
+def build_corpus(cfg: dict[str, object]) -> CorpusSpec | ChainSpec | DyckSpec:
+    """Turn an ablation config's `corpus:` block into a spec, dispatching on `type`.
+
+    Defaults to the recall corpus so existing configs keep working unchanged. Without this the
+    runners each hard-coded CorpusSpec, so a new corpus could not reach an existing ablation.
+    """
+    fields = {k: v for k, v in cfg.items() if k != "type"}
+    kind = cfg.get("type", "recall")
+    if kind == "dyck":
+        return DyckSpec(**fields)
+    if kind == "chain":
+        return ChainSpec(**fields)
+    if kind == "recall":
+        return CorpusSpec(**fields)
+    raise ValueError(f"unknown corpus type: {kind!r} (expected 'recall', 'chain' or 'dyck')")

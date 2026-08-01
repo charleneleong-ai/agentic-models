@@ -27,6 +27,7 @@ from archlab.data import ChainSpec, DyckSpec
 from archlab.model import ModelSpec
 
 D_MODEL, N_HEADS, D_HEAD, D_HIDDEN = 128, 4, 32, 512
+CHUNK_SIZE = 64  # KDA constraint: every corpus seq_len must be a multiple of this
 
 
 def spec_for(n_layers: int, vocab_size: int) -> ModelSpec:
@@ -119,12 +120,21 @@ def dyck_depth_gate(depth: int = 8, steps: int = 600) -> None:
         print(f"{n_layers:>7} {scores[n_layers]:>9.4f} {m['val_local_loss']:>9.4f}", flush=True)
 
     shallow, deep = scores[6], scores[48]
-    print(f"\n6 -> 48 layers: close {deep - shallow:+.4f}")
-    print(
-        "GATE PASSES — depth helps, the corpus is usable"
-        if deep < shallow - 0.05
-        else "GATE FAILS — depth does not help here either"
-    )
+    # Relative, not absolute. An absolute bar is wrong for a task whose whole range is small:
+    # the first Dyck run cut loss 0.0686 -> 0.0197, a 71% reduction, and still missed a -0.05
+    # absolute threshold by 0.001. What matters is whether depth buys a meaningful *fraction*
+    # of the available headroom, and separately whether enough headroom exists to measure with.
+    reduction = (shallow - deep) / max(shallow, 1e-9)
+    print(f"\n6 -> 48 layers: close {deep - shallow:+.4f}  ({reduction:.0%} reduction)")
+    if reduction < 0.25:
+        print("GATE FAILS — depth does not meaningfully help")
+    elif shallow < 0.2:
+        print(
+            f"GATE PARTIAL — depth helps ({reduction:.0%}) but the shallow baseline is already "
+            f"at {shallow:.3f}; too little headroom for a clean ablation. Raise nesting depth."
+        )
+    else:
+        print("GATE PASSES — depth helps and there is headroom to measure it")
 
 
 def dyck_nesting_envelope(steps: int = 600, n_layers: int = 6) -> None:
@@ -142,7 +152,10 @@ def dyck_nesting_envelope(steps: int = 600, n_layers: int = 6) -> None:
     print(f"chance = ln(8) = {math.log(8):.3f}; solved approaches 0\n")
     print(f"{'nesting':>8} {'seq_len':>8} {'close':>9} {'local':>9}")
     for depth in (8, 16, 32, 64):
-        seq_len = max(256, 4 * (2 * depth + 1))
+        # KDA requires seq_len % chunk_size == 0, so round up rather than take the raw width
+        # multiple — 4 * (2*32+1) = 260 is not divisible by 64 and crashes the kernel.
+        raw = max(256, 4 * (2 * depth + 1))
+        seq_len = -(-raw // CHUNK_SIZE) * CHUNK_SIZE
         corpus = DyckSpec(vocab_size=64, seq_len=seq_len, n_types=8, depth=depth, n_groups=2)
         m = run_one(n_layers, corpus, steps)
         print(

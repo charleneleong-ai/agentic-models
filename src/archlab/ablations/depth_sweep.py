@@ -17,10 +17,16 @@ from typing import Any
 import yaml
 
 from archlab.ablations.train import TrainSpec, train_arm
-from archlab.data import CorpusSpec
+from archlab.data import build_corpus
 from archlab.model import ModelSpec
 
 BASELINE = "residual"
+
+# Which loss the gap is measured on. The recall corpus put the depth-sensitive signal in
+# `val_local_loss`; Dyck puts it in `val_recall_loss` (the close brackets) and leaves local as
+# depth-insensitive Markov filler. Getting this wrong measures the wrong quantity, so it is
+# read from the config rather than assumed — and both gaps are recorded either way.
+GAP_METRIC = {"val_local_loss": "gap_local", "val_recall_loss": "gap_close"}
 
 
 def model_spec_for(
@@ -50,13 +56,11 @@ def ordered_arms(arms: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def run(config_path: Path, out_dir: Path, device: str = "cpu") -> list[dict[str, Any]]:
     cfg = yaml.safe_load(config_path.read_text())
-    t, c = cfg["train"], cfg["corpus"]
-    corpus = CorpusSpec(
-        vocab_size=c["vocab_size"],
-        seq_len=c["seq_len"],
-        n_pairs=c["n_pairs"],
-        key_vocab=c["key_vocab"],
-    )
+    t = cfg["train"]
+    corpus = build_corpus(cfg["corpus"])
+    primary = cfg.get("metrics", {}).get("gap_on", "val_local_loss")
+    if primary not in GAP_METRIC:
+        raise ValueError(f"metrics.gap_on must be one of {sorted(GAP_METRIC)}, got {primary!r}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
@@ -64,7 +68,7 @@ def run(config_path: Path, out_dir: Path, device: str = "cpu") -> list[dict[str,
 
     for n_layers in cfg["sweep"]["n_layers"]:
         for seed in t["seeds"]:
-            baseline_loss: float | None = None
+            baseline: dict[str, float] = {}
             for arm in ordered_arms(cfg["arms"]):
                 spec = model_spec_for(arm, cfg, n_layers, corpus.vocab_size)
                 metrics = train_arm(
@@ -81,8 +85,12 @@ def run(config_path: Path, out_dir: Path, device: str = "cpu") -> list[dict[str,
                     corpus,
                 )
                 if arm["id"] == BASELINE:
-                    baseline_loss = metrics["val_local_loss"]
-                gap = round(metrics["val_local_loss"] - baseline_loss, 4)
+                    baseline = {k: metrics[k] for k in ("val_local_loss", "val_recall_loss")}
+                gaps = {
+                    "gap_local": round(metrics["val_local_loss"] - baseline["val_local_loss"], 4),
+                    "gap_close": round(metrics["val_recall_loss"] - baseline["val_recall_loss"], 4),
+                }
+                gap = gaps[GAP_METRIC[primary]]
 
                 row = {
                     "arm": arm["id"],
@@ -90,6 +98,8 @@ def run(config_path: Path, out_dir: Path, device: str = "cpu") -> list[dict[str,
                     "n_blocks": spec.n_blocks,
                     "seed": seed,
                     "gap_vs_residual": gap,
+                    "gap_metric": primary,
+                    **gaps,
                     **metrics,
                 }
                 results.append(row)

@@ -17,6 +17,7 @@ RUNNERS = {
     "attn-res": attn_res.run,
     "attn-res-depth": depth_sweep.run,
     "activation-bound": activation_bound.run,
+    "attn-res-dyck": depth_sweep.run,
 }
 
 
