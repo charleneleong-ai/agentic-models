@@ -97,6 +97,36 @@ instead of turning one dial.
   existed. It worked through the console entry point, which imports the module first — and the
   remote box uses `-m`. Both paths are now exercised.
 
+## The operating point I first chose was wrong
+
+Nesting 16 at 600 steps cleared the gate and then failed in the sweep. Two observations killed
+it:
+
+**1. Nominally identical runs disagree by 0.42.** For the same config and seed I recorded
+0.5439 (gate), ~0.78 three times (stability check), and 0.9638 (sweep). Three consecutive runs
+agreeing to 0.04 while the full set spans 0.42 is not iid noise; it points at a systematic
+difference between invocation paths that I have not found. Model spec, train spec, corpus spec
+and eval seeding all match. **Recorded as unresolved rather than explained away** — it is a
+live reason to distrust any single-run number from that regime.
+
+**2. The difficulty was undertraining, not the task.** Repeating one config at three budgets:
+
+| steps | 3 runs, same config and seed | spread |
+|---:|---|---:|
+| 600 | 0.7714, 0.8091, 0.7793 | 0.0377 |
+| 1200 | 0.0370, 0.1277, 0.0250 | 0.1027 |
+| 2400 | 0.0037, 0.0032, 0.0017 | **0.0020** |
+
+At 2400 steps nesting 16 is **solved** — 0.003, with a noise floor of 0.002. So the "hard"
+regime at 600 steps was a model stopped before it converged, and an unconverged model is
+exactly what cannot be measured reliably. Loss near 0.9 looked like headroom; it was a
+half-trained run.
+
+**The rule this yields:** difficulty must come from the *task*, and the budget must reach
+convergence. A gate that only asks "is the loss high?" cannot tell those apart — which is why
+`dyck-stability` (repeat one config) and `dyck-converged` (sweep difficulty at a converged
+budget) now exist alongside it.
+
 ## What this unblocks
 
 The depth sweep that has been blocked since [`attn-res-depth`](attn-res-depth.md). Re-running
@@ -110,7 +140,11 @@ setting where the *absence* of a depth effect would be informative, which is pre
 
 ## Next
 
-1. Confirm depth helps at nesting 16 with real headroom (`archlab gate dyck --chain-len 16`).
-2. Re-run the AttnRes depth sweep on Dyck at that operating point.
-3. `kda-state-capacity` may also be unblocked — a fixed recurrent state has to hold the bracket
-   stack, and nesting depth is now a direct dial on how much state that requires.
+1. **Find a nesting depth that is hard at convergence** (`archlab gate dyck-converged`) — the
+   run in flight. Nesting 16 solves at 2400 steps, so the operating point must be deeper.
+2. Re-run the AttnRes depth sweep there, with the noise floor measured *first* so the
+   resolvable effect size is known before any arm is compared.
+3. Resolve the 0.42 cross-invocation discrepancy, or stop trusting any comparison across
+   separate runs of this harness.
+4. `kda-state-capacity` may also be unblocked — a fixed recurrent state has to hold the bracket
+   stack, and nesting depth is a direct dial on how much state that requires.

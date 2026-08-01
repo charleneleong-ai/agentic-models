@@ -162,3 +162,58 @@ def dyck_nesting_envelope(steps: int = 600, n_layers: int = 6) -> None:
             f"{depth:>8} {seq_len:>8} {m['val_recall_loss']:>9.4f} {m['val_local_loss']:>9.4f}",
             flush=True,
         )
+
+
+def dyck_stability(depth: int = 16, repeats: int = 3) -> None:
+    """Is this operating point reproducible at all? Run the *same* config repeatedly.
+
+    The first Dyck sweep found a 0.42 swing between two runs of identical config and seed —
+    pure CUDA nondeterminism, not seed variance. That is the signature of an operating point
+    sitting on the learnability edge, where tiny numerical differences flip whether the model
+    cracks the task. No arm comparison survives that.
+
+    Sweeping the step budget asks whether the instability is a convergence artifact (longer
+    training settles it) or intrinsic to the difficulty (it does not). Fixed seed throughout,
+    so any spread here is nondeterminism alone — a floor under every gap this corpus can
+    resolve.
+    """
+    corpus = DyckSpec(vocab_size=64, seq_len=256, n_types=8, depth=depth, n_groups=2)
+    print(f"=== Dyck stability at nesting {depth} (residual, 12 layers, seed 0 throughout) ===")
+    print(f"chance = {math.log(corpus.n_types):.3f}\n")
+    print(f"{'steps':>7} {'runs':>28} {'spread':>8}")
+
+    for steps in (600, 1200, 2400):
+        vals = [run_one(12, corpus, steps)["val_recall_loss"] for _ in range(repeats)]
+        spread = max(vals) - min(vals)
+        print(f"{steps:>7} {' '.join(f'{v:.4f}' for v in vals):>28} {spread:>8.4f}", flush=True)
+
+    print("\nSpread here is the noise floor: no arm gap smaller than this is measurable.")
+
+
+def dyck_converged_envelope(steps: int = 2400, repeats: int = 2) -> None:
+    """Find a nesting depth that is hard *at convergence*, not hard because training stopped.
+
+    The stability check showed nesting 16 solves to 0.003 with a 0.002 noise floor at 2400
+    steps, while at 600 steps it sits near 0.78 — so the difficulty at 600 steps was
+    undertraining, and an undertrained model is precisely what cannot be measured reliably.
+
+    Difficulty has to come from the task. This sweeps nesting depth at a converged budget and
+    repeats each point, so both the loss and its noise floor are known before any arm is
+    compared against it. A usable operating point needs loss well above the floor *and* a floor
+    well below the effects worth detecting.
+    """
+    print(f"=== Dyck converged envelope ({steps} steps, 12 layers, {repeats}x each) ===")
+    print(f"chance = ln(8) = {math.log(8):.3f}\n")
+    print(f"{'nesting':>8} {'seq_len':>8} {'runs':>20} {'mean':>8} {'floor':>8}")
+    for depth in (16, 32, 48, 64):
+        raw = max(256, 4 * (2 * depth + 1))
+        seq_len = -(-raw // CHUNK_SIZE) * CHUNK_SIZE
+        corpus = DyckSpec(vocab_size=64, seq_len=seq_len, n_types=8, depth=depth, n_groups=2)
+        vals = [run_one(12, corpus, steps)["val_recall_loss"] for _ in range(repeats)]
+        mean = sum(vals) / len(vals)
+        print(
+            f"{depth:>8} {seq_len:>8} {' '.join(f'{v:.4f}' for v in vals):>20} "
+            f"{mean:>8.4f} {max(vals) - min(vals):>8.4f}",
+            flush=True,
+        )
+    print("\nWant: mean well above the floor, floor well below the gaps worth detecting.")

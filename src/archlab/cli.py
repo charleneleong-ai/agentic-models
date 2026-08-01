@@ -61,6 +61,10 @@ def gate(
         corpus_gate.dyck_depth_gate(depth=chain_len, steps=steps)
     elif check == "dyck-nesting":
         corpus_gate.dyck_nesting_envelope(steps=steps)
+    elif check == "dyck-stability":
+        corpus_gate.dyck_stability(depth=chain_len)
+    elif check == "dyck-converged":
+        corpus_gate.dyck_converged_envelope(steps=steps)
     else:
         raise typer.BadParameter("check must be 'envelope', 'depth', 'dyck' or 'dyck-nesting'")
 
