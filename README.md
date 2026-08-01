@@ -79,22 +79,56 @@ configs/ablations/*.yaml  one spec per open question (see docs/experiments/)
 docs/                     cross-cutting notes — see docs/README.md for the split
 ```
 
-## Open questions
+## Findings
 
-Five ablations in [`configs/ablations/`](configs/ablations/), each targeting something the K3
-report leaves unanswered — the per-component split of the 2.5x scaling claim, the unswept
-KDA:MLA ratio, where a fixed recurrent state saturates, what capping activations costs, and
-whether QB's edge widens with expert count.
+Four ablations run, each with its hypothesis written down *before* its runner existed. **All
+four came back negative**, and two undercut earlier conclusions of my own. Full writeups in
+[`docs/experiments/`](docs/experiments/).
 
-**One has run.** [`qb-scale`](docs/experiments/qb-scale.md) falsified its own hypothesis: QB's
-edge over sign updates *narrows* with expert count (149x at n=64 down to 39x at n=896) rather
-than widening. It also turned up something the spec did not anticipate — tie degradation
-compounds with `n`, and at 896 experts a saturated router defeats every balancer tested,
-including the offline solver. Router temperature is a precondition for balancing at that scale,
-not a free hyperparameter.
+| Ablation | Question | Result |
+|---|---|---|
+| [`qb-scale`](docs/experiments/qb-scale.md) | Does QB's edge over sign updates widen with expert count? | **No** — it *narrows*, 149x to 39x |
+| [`attn-res`](docs/experiments/attn-res.md) | How much of the 2.5x is the depth axis alone? | Residual beats every AttnRes arm at 12 layers |
+| [`attn-res-depth`](docs/experiments/attn-res-depth.md) | Is that a depth artifact? | Unanswerable — the corpus rewards no depth |
+| [`activation-bound`](docs/experiments/activation-bound.md) | Is capping activations free at BF16, load-bearing at FP8? | Neither — nothing came within 5x of FP8 range |
 
-The other four need a training loop that does not exist yet.
-[`docs/experiments/`](docs/experiments/) has the contract and the reasoning.
+### What holds up
+
+Ordered by how much weight the evidence bears:
+
+1. **Tie degradation compounds with expert count.** At 896 experts a saturated sigmoid router
+   defeats *every* balancer, including the offline solver — so it is the assignment problem
+   becoming infeasible, not an estimator defect. **Router temperature is a precondition for
+   balancing at K3's scale, not a free hyperparameter.** Replicated over 5 seeds.
+2. **A cap that engages raises seed variance ~10x.** Clean separation, no overlap, and group
+   membership predicted in advance by the mechanism. This is the *opposite* of the stabilising
+   role §2.3.2 describes for SiTU-GLU.
+3. **AttnRes's cost scales with depth, not with sources attended.** Blocked at 48 layers costs
+   5.5x more than full at 6, on comparable source counts. Blocking cuts cost ~3x without
+   stopping its growth — suggesting K3's blocking may do optimization work, not only the memory
+   work §2.2 claims.
+4. **Requiring depth is not the same as inducing a model to use depth.** One mechanism explains
+   two failed corpus designs: models memorize until memorization fails, then fail, rather than
+   falling back on an algorithm.
+
+### What none of this shows
+
+**No claim here contradicts K3.** Every result is at 3M-100M parameters against 2.8T, and the
+report's arguments are about a regime this cannot reach — 93 layers, documented activation
+outliers, 896 experts under real load. What the negatives establish is narrower and still
+useful: these mechanisms are **not self-evidently beneficial**, so the case for each rests on
+the scale argument holding, which nano scale cannot check.
+
+### Blocked
+
+Depth and long-range work ([`hybrid-ratio`](configs/ablations/hybrid-ratio.yaml),
+[`kda-state-capacity`](configs/ablations/kda-state-capacity.yaml)) needs a corpus that is hard,
+learnable *and* depth-sensitive at once. Two designs failed that bar; the plausible fixes
+(curriculum, larger models) are separate projects.
+
+The gate that catches this is committed tooling — `archlab gate envelope` and
+`archlab gate depth` cost minutes against the two GPU-hours the depth sweep spent learning the
+same thing slowly. See [`corpus-gate.md`](docs/experiments/corpus-gate.md).
 
 ## Related
 
