@@ -127,6 +127,46 @@ convergence. A gate that only asks "is the loss high?" cannot tell those apart �
 `dyck-stability` (repeat one config) and `dyck-converged` (sweep difficulty at a converged
 budget) now exist alongside it.
 
+## The operating point, characterised
+
+Sweeping nesting depth at a converged budget (2400 steps, 12 layers, each point run twice so
+the noise floor is measured alongside the loss):
+
+| nesting | seq_len | mean | noise floor | floor/mean | usable? |
+|---:|---:|---:|---:|---:|---|
+| 16 | 256 | 0.0018 | 0.0005 | 28% | no — solved, no headroom |
+| 32 | 320 | 0.1826 | 0.1080 | 59% | no — noise dominates |
+| 48 | 448 | 0.7603 | 0.4390 | 58% | no — noise dominates |
+| **64** | 576 | **1.1305** | **0.0849** | **7.5%** | **yes** |
+
+**Relative noise is U-shaped in difficulty, not monotone.** I predicted it would rise with
+difficulty; it does through 32 and 48 and then falls sharply at 64. The middle is the
+*partial-learning* regime, where some runs crack the task and some do not, so variance is
+maximal. At nesting 64 every run fails the same way — unsolved (1.13 against chance 2.079, so
+real learning is still happening) and reproducible.
+
+That gives a usable operating point for the first time: **nesting 64 at 2400 steps**, 1.13 of
+headroom against a 0.085 floor, a 13:1 ratio.
+
+The lesson generalises past this corpus. A difficulty dial has three regimes — solved, partial,
+saturated-but-learning — and only the first and third are measurable. Picking "as hard as
+possible while still learning" lands in the partial regime, which is exactly the worst place to
+measure from. That is the mistake nesting 16 at 600 steps made in a different disguise.
+
+## Cost, and why the sweep is not launched
+
+Nesting 64 needs `seq_len` 576 and 4x the step budget: roughly **9x per run** against the
+original config, extrapolating to **10-18 GPU-hours** for a 24-run depth sweep. Cheaper designs
+exist and trade different things:
+
+- depths {6, 48} only — halves the runs, loses the shape of the curve
+- `seq_len` 320 rather than 576 — the `4 x width` padding was arbitrary; two groups need only
+  258, which is ~1.8x cheaper
+- fewer arms, or fewer seeds — but seeds are what the noise floor argues *for*
+
+Which trade is right is a budget decision, so the sweep is left un-launched rather than
+started unilaterally.
+
 ## What this unblocks
 
 The depth sweep that has been blocked since [`attn-res-depth`](attn-res-depth.md). Re-running
@@ -140,11 +180,14 @@ setting where the *absence* of a depth effect would be informative, which is pre
 
 ## Next
 
-1. **Find a nesting depth that is hard at convergence** (`archlab gate dyck-converged`) — the
-   run in flight. Nesting 16 solves at 2400 steps, so the operating point must be deeper.
-2. Re-run the AttnRes depth sweep there, with the noise floor measured *first* so the
-   resolvable effect size is known before any arm is compared.
-3. Resolve the 0.42 cross-invocation discrepancy, or stop trusting any comparison across
-   separate runs of this harness.
+1. **Decide the budget.** Nesting 64 / 2400 steps is characterised and ready; the full sweep is
+   10-18 GPU-hours, and the cheaper variants above trade coverage for cost.
+2. Re-run the AttnRes depth sweep there. The noise floor is now known *before* the comparison,
+   so the resolvable effect size is known too — 0.085, which is smaller than every AttnRes gap
+   observed on the previous corpus.
+3. Resolve the 0.42 cross-invocation discrepancy. The converged floor of 0.0005 suggests it is
+   confined to the unconverged regime, which would make it moot at the new operating point —
+   but that is a hypothesis, not a finding.
 4. `kda-state-capacity` may also be unblocked — a fixed recurrent state has to hold the bracket
-   stack, and nesting depth is a direct dial on how much state that requires.
+   stack, and nesting depth is a direct dial on how much state that requires. It now has a
+   validated corpus *and* a measured noise floor to work against.
