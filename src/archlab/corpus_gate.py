@@ -23,7 +23,7 @@ from __future__ import annotations
 import math
 
 from archlab.ablations.train import TrainSpec, train_arm
-from archlab.data import ChainSpec
+from archlab.data import ChainSpec, DyckSpec
 from archlab.model import ModelSpec
 
 D_MODEL, N_HEADS, D_HEAD, D_HIDDEN = 128, 4, 32, 512
@@ -99,3 +99,53 @@ def depth_at_the_cliff(chain_len: int, steps: int) -> None:
         if deep < shallow - 0.20
         else "GATE FAILS — depth does not move the boundary"
     )
+
+
+def dyck_depth_gate(depth: int = 8, steps: int = 600) -> None:
+    """The gate for the Dyck corpus: does adding layers help predict nested closes?
+
+    Same bar as before — a corpus is only usable for a depth ablation if plain depth buys
+    something on it. Two prior designs failed here, so this runs before any sweep.
+    """
+    corpus = DyckSpec(vocab_size=64, seq_len=256, n_types=8, depth=depth, n_groups=2)
+    print(f"=== Dyck depth gate (nesting depth={depth}, {steps} steps) ===")
+    print(f"chance = ln({corpus.n_types}) = {math.log(corpus.n_types):.3f}; solved approaches 0\n")
+    print(f"{'layers':>7} {'close':>9} {'local':>9}")
+
+    scores = {}
+    for n_layers in (6, 12, 24, 48):
+        m = run_one(n_layers, corpus, steps)
+        scores[n_layers] = m["val_recall_loss"]
+        print(f"{n_layers:>7} {scores[n_layers]:>9.4f} {m['val_local_loss']:>9.4f}", flush=True)
+
+    shallow, deep = scores[6], scores[48]
+    print(f"\n6 -> 48 layers: close {deep - shallow:+.4f}")
+    print(
+        "GATE PASSES — depth helps, the corpus is usable"
+        if deep < shallow - 0.05
+        else "GATE FAILS — depth does not help here either"
+    )
+
+
+def dyck_nesting_envelope(steps: int = 600, n_layers: int = 6) -> None:
+    """Sweep *nesting* depth at fixed model depth to locate the hard-but-learnable band.
+
+    The first Dyck gate showed nesting depth 8 is nearly solved by 6 layers (close loss 0.07
+    against chance 2.08). That is the opposite failure to the composition corpus — learnable,
+    but too easy for depth to matter. A depth ablation needs a nesting depth that a shallow
+    model cannot handle, so find where accuracy starts to fall before sweeping model depth.
+
+    Unlike the composition corpus this should degrade *smoothly*: partial credit is available,
+    since getting the inner brackets right is worth something even when the outer ones are lost.
+    """
+    print(f"=== Dyck nesting envelope ({n_layers} layers, {steps} steps) ===")
+    print(f"chance = ln(8) = {math.log(8):.3f}; solved approaches 0\n")
+    print(f"{'nesting':>8} {'seq_len':>8} {'close':>9} {'local':>9}")
+    for depth in (8, 16, 32, 64):
+        seq_len = max(256, 4 * (2 * depth + 1))
+        corpus = DyckSpec(vocab_size=64, seq_len=seq_len, n_types=8, depth=depth, n_groups=2)
+        m = run_one(n_layers, corpus, steps)
+        print(
+            f"{depth:>8} {seq_len:>8} {m['val_recall_loss']:>9.4f} {m['val_local_loss']:>9.4f}",
+            flush=True,
+        )

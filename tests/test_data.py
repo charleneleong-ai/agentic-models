@@ -15,9 +15,12 @@ from archlab.data import (
     QUERY_TOKEN,
     ChainSpec,
     CorpusSpec,
+    DyckSpec,
     function_table,
     generate,
+    dyck_close_positions,
     generate_chains,
+    generate_dyck,
     markov_chain,
 )
 
@@ -192,3 +195,70 @@ class TestCompositionalCorpus:
         b, mb = generate_chains(CHAIN, 4, seed=3)
         assert torch.equal(a, b) and torch.equal(ma, mb)
         assert not torch.equal(generate_chains(CHAIN, 4, seed=4)[0], a)
+
+
+DYCK = DyckSpec(vocab_size=64, seq_len=256, n_types=8, depth=6, n_groups=2)
+N_DYCK_SEQS = 24
+
+
+@pytest.fixture(scope="module")
+def dyck_sample() -> tuple[torch.Tensor, torch.Tensor]:
+    return generate_dyck(DYCK, N_DYCK_SEQS)
+
+
+class TestDyckCorpus:
+    """Third corpus design. Chosen because nesting depth is a *continuous* difficulty dial —
+    the previous two failed by jumping from trivial to impossible with nothing between."""
+
+    def test_closes_are_the_reverse_of_opens(
+        self, dyck_sample: tuple[torch.Tensor, torch.Tensor]
+    ) -> None:
+        """The target is fully determined by the prefix. If this breaks, the task is noise."""
+        tokens, mask = dyck_sample
+        checked = 0
+        for i in range(N_DYCK_SEQS):
+            pos = mask[i].nonzero().flatten().tolist()
+            for start in range(0, len(pos), DYCK.depth):
+                group = pos[start : start + DYCK.depth]
+                open_start = group[0] - DYCK.depth
+                opens = [int(tokens[i, open_start + j]) - DYCK.open_base for j in range(DYCK.depth)]
+                closes = [int(tokens[i, p]) - DYCK.close_base for p in group]
+                assert closes == list(reversed(opens))
+                checked += 1
+        assert checked == N_DYCK_SEQS * DYCK.n_groups
+
+    def test_group_is_marked_and_well_formed(
+        self, dyck_sample: tuple[torch.Tensor, torch.Tensor]
+    ) -> None:
+        tokens, mask = dyck_sample
+        for i, j in zip(*mask.nonzero(as_tuple=True), strict=True):
+            assert DYCK.close_base <= tokens[i, j] < DYCK.filler_base
+
+    def test_every_nesting_level_is_represented(
+        self, dyck_sample: tuple[torch.Tensor, torch.Tensor]
+    ) -> None:
+        """The per-depth breakdown is the diagnostic; it needs all levels present."""
+        _, mask = dyck_sample
+        idx = dyck_close_positions(DYCK, mask)
+        assert sorted(set(idx[mask].tolist())) == list(range(DYCK.depth))
+
+    def test_outer_brackets_are_not_guessable_from_recent_context(
+        self, dyck_sample: tuple[torch.Tensor, torch.Tensor]
+    ) -> None:
+        """The outermost close is `depth` tokens from its open. If the type distribution at the
+        outermost position were skewed, a model could guess it without tracking the stack."""
+        tokens, mask = dyck_sample
+        idx = dyck_close_positions(DYCK, mask)
+        outer = (idx == DYCK.depth - 1) & mask
+        types = tokens[outer] - DYCK.close_base
+        assert len(set(types.tolist())) > DYCK.n_types // 2  # spread, not concentrated
+
+    def test_capacity_is_validated(self) -> None:
+        with pytest.raises(ValueError, match="needs seq_len"):
+            generate_dyck(DyckSpec(seq_len=16, depth=8, n_groups=2), 2)
+
+    def test_reproducible_by_seed(self) -> None:
+        a, ma = generate_dyck(DYCK, 4, seed=5)
+        b, mb = generate_dyck(DYCK, 4, seed=5)
+        assert torch.equal(a, b) and torch.equal(ma, mb)
+        assert not torch.equal(generate_dyck(DYCK, 4, seed=6)[0], a)

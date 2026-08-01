@@ -40,10 +40,6 @@ def ablate(
     typer.echo(f"{len(rows)} rows -> {out_root / name / 'results.jsonl'}")
 
 
-if __name__ == "__main__":
-    app()
-
-
 @app.command()
 def gate(
     check: str = typer.Argument(..., help="envelope | depth"),
@@ -60,5 +56,13 @@ def gate(
         corpus_gate.chain_length_envelope()
     elif check == "depth":
         corpus_gate.depth_at_the_cliff(chain_len=chain_len, steps=steps)
+    elif check == "dyck":
+        corpus_gate.dyck_depth_gate(depth=chain_len, steps=steps)
+    elif check == "dyck-nesting":
+        corpus_gate.dyck_nesting_envelope(steps=steps)
     else:
-        raise typer.BadParameter("check must be 'envelope' or 'depth'")
+        raise typer.BadParameter("check must be 'envelope', 'depth', 'dyck' or 'dyck-nesting'")
+
+
+if __name__ == "__main__":
+    app()
