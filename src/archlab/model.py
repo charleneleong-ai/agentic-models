@@ -21,6 +21,7 @@ from archlab.attention.kda import KDA
 from archlab.attention.mla import MLA
 from archlab.depth.attn_res import BlockAttnRes, FullAttnRes
 from archlab.depth.residual import ResidualStack
+from archlab.mup import BASE_WIDTH, apply_mup_init
 from archlab.precision import ActivationStats, Quantizer, identity, quantizer_for
 
 
@@ -41,6 +42,8 @@ class ModelSpec:
     precision: str = "bf16"
     beta_gate: float = 4.0
     beta_up: float = 25.0
+    mup: bool = False  # Standard Parametrization by default; muP for width ladders
+    base_width: int = BASE_WIDTH
 
 
 class SwiGLU(nn.Module):
@@ -134,6 +137,17 @@ class NanoLM(nn.Module):
         self.depth = build_depth_mixer(spec)
         self.out_norm = nn.RMSNorm(spec.d_model)
         self.head = nn.Linear(spec.d_model, spec.vocab_size, bias=False)
+
+        # muP: rescale hidden init by 1/sqrt(m) and scale the logits by 1/m, so activation
+        # magnitudes and optimal hyperparameters hold still as width changes. Under SP they do
+        # not, which makes a width ladder ambiguous between "the mechanism does not transfer"
+        # and "the parametrization broke" (Tensor Programs V).
+        # Only the init rescale and the per-class learning rates in `mup_param_groups` do work
+        # here; muP's output multiplier is absorbed by the RMSNorm before the head, so there is
+        # deliberately no logit scaling. See `archlab.mup.output_multiplier`.
+        self.width_mult = spec.d_model / spec.base_width if spec.mup else 1.0
+        if spec.mup:
+            apply_mup_init(self, self.width_mult)
 
     def forward(self, tokens: Tensor) -> Tensor:
         h = self.depth(self.embed(tokens), list(self.layers))

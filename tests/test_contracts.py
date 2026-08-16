@@ -13,8 +13,11 @@ import pytest
 import torch
 from torch import nn
 
+from archlab.ablations.train import TrainSpec, enforce_determinism, train_arm
 from archlab.attention.kda import kda_chunkwise, kda_recurrent, lower_bounded_decay
+from archlab.data import CorpusSpec
 from archlab.depth.attn_res import BlockAttnRes, FullAttnRes
+from archlab.model import ModelSpec
 from archlab.moe.latent_moe import LatentMoE
 from archlab.moe.quantile_balance import topk_route
 
@@ -132,3 +135,87 @@ class TestNoStateLeaksBetweenForwards:
         module(x, layers)
 
         assert module.live_sources() == first
+
+
+class TestDeterminismIsDefault:
+    """Cross-process reproducibility, measured: same config and seed in three separate
+    processes spanned 0.20 in final loss without this, and agreed to four decimals with it.
+
+    An ablation is a comparison *between runs*. A harness reproducible only within one process
+    invalidates every cross-invocation comparison, and does it invisibly — the noise looks like
+    an effect. So determinism is on unless explicitly disabled.
+    """
+
+    def test_determinism_is_on_by_default(self) -> None:
+        assert TrainSpec().deterministic is True
+
+    def test_enforce_determinism_sets_the_torch_flags(self) -> None:
+        torch.backends.cudnn.benchmark = True  # simulate a non-deterministic starting state
+        enforce_determinism()
+        assert torch.backends.cudnn.deterministic is True
+        assert torch.backends.cudnn.benchmark is False
+
+    def test_repeated_cpu_runs_are_identical(self) -> None:
+        """The property the flags buy, asserted end to end on CPU."""
+        corpus = CorpusSpec(vocab_size=32, seq_len=32, n_pairs=2, key_vocab=8)
+        spec = ModelSpec(
+            vocab_size=32, d_model=16, n_layers=2, n_heads=2, d_head=8, d_hidden=32, chunk_size=8
+        )
+        train = TrainSpec(steps=3, batch_size=2, eval_batches=1, seed=0)
+
+        a = train_arm(spec, train, corpus)
+        b = train_arm(spec, train, corpus)
+        assert a["val_markov_loss"] == b["val_markov_loss"]
+        assert a["val_recall_loss"] == b["val_recall_loss"]
+
+
+class TestMupGroupsReachTheOptimizer:
+    """`mup_param_groups` was imported by `train_arm` and never called for three commits.
+
+    The muP verification ran, compared `mup=True` against `mup=False`, and reported that the
+    learning-rate transfer did not reproduce — when both arms had in fact been handed the same
+    single-group optimizer, differing only by an init rescale. The function itself was verified
+    in isolation, which is exactly what made the gap invisible: the unit was correct and unused.
+
+    Ruff cannot catch it here; the repo's gate is complexity-only (C901, PLR0915), so F401 never
+    fires. So the contract is asserted where it actually matters — at the optimizer.
+    """
+
+    def spy_groups(self, mup: bool) -> list[tuple[int, float]]:
+        real, seen = torch.optim.AdamW, []
+
+        def spy(params, **kwargs):  # type: ignore[no-untyped-def]
+            materialized = list(params)
+            if materialized and isinstance(materialized[0], dict):
+                seen.append([(len(g["params"]), g["lr"]) for g in materialized])
+            else:
+                seen.append([(len(materialized), kwargs["lr"])])
+            return real(materialized, **kwargs)
+
+        torch.optim.AdamW = spy  # type: ignore[misc]
+        try:
+            spec = ModelSpec(
+                vocab_size=32,
+                d_model=512,
+                n_layers=2,
+                n_heads=4,
+                d_head=32,
+                d_hidden=128,
+                chunk_size=64,
+                mup=mup,
+                base_width=128,
+            )
+            corpus = CorpusSpec(vocab_size=32, seq_len=64, n_pairs=2, key_vocab=8)
+            train_arm(spec, TrainSpec(steps=1, batch_size=2, eval_batches=1, lr=1e-2), corpus)
+        finally:
+            torch.optim.AdamW = real  # type: ignore[misc]
+        return seen[-1]
+
+    def test_mup_produces_scaled_groups(self) -> None:
+        """Width 512 over base 128 is m=4, so hidden and output must arrive at lr/4."""
+        groups = self.spy_groups(mup=True)
+        assert len(groups) == 3
+        assert {lr for _, lr in groups} == {1e-2, 2.5e-3}
+
+    def test_plain_training_stays_single_group(self) -> None:
+        assert len(self.spy_groups(mup=False)) == 1

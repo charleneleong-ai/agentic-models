@@ -1,14 +1,19 @@
-# What is the real KDA:MLA tradeoff curve? K3 picks 3:1 and does not publish the sweep.
+# Does KDA cause "Large-Window Laziness" like SWA?
 #
-# KDA carries the sequence at constant memory but mixes lossily; MLA restores exact global
-# interaction at linear cache cost. The ratio sets where a model sits between them, and it is
-# the single most consequential number in the architecture. Nothing published sweeps it.
+# arXiv 2606.15378 found that larger SWA windows delay retrieval head formation in
+# full-attention layers — the efficient attention makes the model "lazy" about learning
+# retrieval. KDA is a recurrent state mixer with decay, which is a different mechanism
+# from SWA but has a similar "window" property. Does KDA cause the same laziness?
 #
-# Recall-sensitive evals are the point: val_loss alone will under-report what pure-KDA loses,
-# which is precisely the failure mode a fixed-size state should have.
+# The original question (where does the KDA:MLA ratio sit?) is partially answered by
+# the paper: different hybrids eventually converge, so the ratio matters less than
+# expected. But the laziness question is still open for KDA specifically.
+#
+# This ablation tests whether KDA ratios affect how quickly retrieval heads form,
+# and whether pure-KDA models are permanently impaired vs. just slower to learn.
 
 name: hybrid-ratio
-question: Where does lossy-but-cheap mixing stop being good enough?
+question: Does KDA delay retrieval head formation like SWA does?
 primitive: archlab.attention
 
 arms:                             # pattern repeats through the backbone
@@ -33,26 +38,35 @@ model:
   n_blocks: 8
   ffn: situ_glu
   d_hidden: 1024
-  positional: none                # NoPE — position flows only through KDA decay
+
+corpus:
+  vocab_size: 64
+  seq_len: 256
+  n_pairs: 4
+  key_vocab: 16
 
 train:
-  dataset: tinystories
-  seq_len: 1024
+  seq_len: 256
   batch_size: 16
-  steps: 4000
+  steps: 2400
   lr: 3.0e-4
   schedule: cosine
-  optimizer: muon
-  seeds: [0, 1]
+  seeds: [0, 1, 2]
 
 metrics:
-  primary: val_loss
+  primary: val_markov_loss
   also:
     - needle_at_depth_acc         # exact recall — where a fixed state should fail first
     - kv_cache_bytes_at_seq       # archlab.memory accounting, per arm
     - tokens_per_sec
+    # TODO: add retrieval head formation speed if measuring tooling supports it
 
-# all-kda has no global-attention path, so NoPE leaves it position-blind beyond KDA's decay.
-# Expect it to fail recall hardest — that is the measurement, not a bug.
+# The laziness hypothesis: more KDA layers → slower retrieval head formation →
+# worse recall at early training, possibly recovering at convergence.
+# If KDA causes laziness, pure-KDA will show the worst early-training recall
+# even if final loss is comparable.
 
 report: docs/experiments/hybrid-ratio.md
+
+wandb:
+  project: archlab-hybrid-ratio

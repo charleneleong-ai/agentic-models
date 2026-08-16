@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import pytest
 import torch
+from torch import Tensor
 from torch import nn
 
+from archlab.model import ModelSpec, NanoLM
 from archlab.depth.attn_res import BlockAttnRes, FullAttnRes
 
 D_MODEL, B, T = 16, 2, 4
@@ -97,3 +99,43 @@ class TestBlockAttnRes:
         res = BlockAttnRes(D_MODEL, n_blocks=2, block_size=3)
         out = res(torch.randn(B, T, D_MODEL), layer_stack(6))
         assert out.shape == (B, T, D_MODEL)
+
+
+class TestBlockedDegeneratesToFull:
+    """`block_size == 1` makes BlockAttnRes identical to FullAttnRes, arms and all.
+
+    Found by a smoke run whose two AttnRes arms reported identical losses and identical
+    parameter counts. That was a degenerate config rather than a bug — but a ladder configured
+    that way silently compares an arm against itself and reports perfect rank agreement, which
+    is the most flattering possible wrong answer.
+    """
+
+    def outputs_for(self, n_layers: int, n_blocks: int) -> tuple[Tensor, Tensor]:
+        outs = []
+        for mixing in ("full", "block"):
+            torch.manual_seed(0)
+            model = NanoLM(
+                ModelSpec(
+                    vocab_size=32,
+                    d_model=64,
+                    n_layers=n_layers,
+                    n_heads=2,
+                    d_head=32,
+                    d_hidden=128,
+                    chunk_size=64,
+                    depth_mixing=mixing,
+                    n_blocks=n_blocks,
+                )
+            )
+            with torch.no_grad():
+                outs.append(model(torch.randint(32, (2, 64))))
+        return outs[0], outs[1]
+
+    def test_block_size_one_is_indistinguishable_from_full(self) -> None:
+        full, blocked = self.outputs_for(n_layers=4, n_blocks=4)
+        torch.testing.assert_close(full, blocked)
+
+    def test_the_shipped_config_shape_keeps_them_distinct(self) -> None:
+        """12 layers over 4 blocks — what configs/ablations/attn-res-scale.yaml actually runs."""
+        full, blocked = self.outputs_for(n_layers=12, n_blocks=4)
+        assert not torch.allclose(full, blocked)

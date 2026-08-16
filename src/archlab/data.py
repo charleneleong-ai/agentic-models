@@ -238,3 +238,276 @@ def chain_batches(
     spec: ChainSpec, batch_size: int, n_batches: int, seed: int
 ) -> list[tuple[Tensor, Tensor]]:
     return [generate_chains(spec, batch_size, seed=seed * 100_000 + i) for i in range(n_batches)]
+
+
+# ---------------------------------------------------------------------------
+# Dyck corpus — nested brackets
+# ---------------------------------------------------------------------------
+#
+# Third corpus design. The first two failed the same way (`corpus-gate.md`): the recall corpus
+# was trivial-or-impossible, the composition corpus memorizable-or-impossible. Neither had a
+# regime that was hard, learnable and depth-sensitive at once, because difficulty jumped in a
+# cliff rather than rising smoothly.
+#
+# Dyck is chosen for that specific reason: nesting depth is a *continuous* difficulty dial, and
+# depth separation for bracket languages is the best-established result in the area.
+#
+#     [ ( { < ... > } ) ]
+#
+# Opening brackets are random; the closing sequence is then fully *determined* — close j must
+# match open (d-j). So the closes are perfectly predictable in principle, and predicting them
+# requires reading the stack in reverse order, which is the operation that costs depth. A model
+# that only tracks recent context can close the innermost pairs and must guess the outer ones,
+# so accuracy should degrade with nesting position in a way that is directly observable.
+#
+# Difficulty knob: `depth`. Unlike `chain_len` in the composition corpus, partial credit is
+# available — getting the inner half right is worth something — so the loss should move
+# smoothly instead of sitting at chance until it collapses.
+
+BRACKET_MARK = 0  # signals "start of a bracket group"
+
+
+@dataclass(frozen=True)
+class DyckSpec:
+    """Nested-bracket corpus. `depth` is the difficulty dial and the depth requirement."""
+
+    vocab_size: int = 64
+    seq_len: int = 256
+    n_types: int = 8
+    depth: int = 8
+    n_groups: int = 2
+    zipf_alpha: float = 1.2
+    seed: int = 0
+
+    @property
+    def width(self) -> int:
+        """One group: marker + `depth` opens + `depth` closes."""
+        return 2 * self.depth + 1
+
+    @property
+    def n_filler(self) -> int:
+        return self.vocab_size - 1 - 2 * self.n_types
+
+    @property
+    def open_base(self) -> int:
+        return 1
+
+    @property
+    def close_base(self) -> int:
+        return 1 + self.n_types
+
+    @property
+    def filler_base(self) -> int:
+        return 1 + 2 * self.n_types
+
+
+def dyck_filler_chain(spec: DyckSpec) -> Tensor:
+    g = torch.Generator().manual_seed(spec.seed)
+    n = spec.n_filler
+    zipf = torch.arange(1, n + 1, dtype=torch.float) ** -spec.zipf_alpha
+    return torch.softmax(torch.rand(n, n, generator=g) * 2.0 + zipf.log().unsqueeze(0), dim=-1)
+
+
+def generate_dyck(spec: DyckSpec, n_seqs: int, seed: int | None = None) -> tuple[Tensor, Tensor]:
+    """Return (tokens, target_mask). The mask marks closing brackets only.
+
+    Also returns nothing about nesting position — see `dyck_close_positions` for the per-depth
+    breakdown, which is what shows whether a model is tracking the whole stack or just the top.
+    """
+    g = torch.Generator().manual_seed(spec.seed if seed is None else seed)
+    trans = dyck_filler_chain(spec)
+
+    cells = spec.seq_len // spec.width
+    if cells < spec.n_groups:
+        raise ValueError(
+            f"n_groups={spec.n_groups} of width {spec.width} needs seq_len >= "
+            f"{spec.n_groups * spec.width}, got {spec.seq_len}"
+        )
+
+    tokens = torch.empty(n_seqs, spec.seq_len, dtype=torch.long)
+    state = torch.randint(spec.n_filler, (n_seqs,), generator=g)
+    for t in range(spec.seq_len):
+        tokens[:, t] = state + spec.filler_base
+        state = torch.multinomial(trans[state], 1, generator=g).squeeze(-1)
+
+    mask = torch.zeros(n_seqs, spec.seq_len, dtype=torch.bool)
+    for i in range(n_seqs):
+        for cell in torch.randperm(cells, generator=g)[: spec.n_groups]:
+            start = int(cell) * spec.width
+            opens = torch.randint(spec.n_types, (spec.depth,), generator=g)
+
+            tokens[i, start] = BRACKET_MARK
+            for j, o in enumerate(opens):
+                tokens[i, start + 1 + j] = spec.open_base + int(o)
+            # Closes are forced: close j matches open (depth-1-j). Reading the stack in reverse
+            # is the operation that requires depth.
+            for j, o in enumerate(reversed(opens.tolist())):
+                pos = start + 1 + spec.depth + j
+                tokens[i, pos] = spec.close_base + o
+                mask[i, pos] = True
+
+    return tokens, mask
+
+
+def dyck_close_positions(spec: DyckSpec, mask: Tensor) -> Tensor:
+    """Nesting index of each masked close: 0 = innermost, depth-1 = outermost.
+
+    The diagnostic that matters. A model tracking only recent context gets the innermost closes
+    and guesses the outermost, so accuracy falling with nesting index is the signature of a
+    depth-limited model — and a flat profile means the stack is genuinely being carried.
+    """
+    idx = torch.zeros_like(mask, dtype=torch.long)
+    for i in range(mask.shape[0]):
+        pos = mask[i].nonzero().flatten()
+        for start in range(0, len(pos), spec.depth):
+            for j in range(spec.depth):
+                if start + j < len(pos):
+                    idx[i, pos[start + j]] = j
+    return idx
+
+
+def dyck_batches(
+    spec: DyckSpec, batch_size: int, n_batches: int, seed: int
+) -> list[tuple[Tensor, Tensor]]:
+    return [generate_dyck(spec, batch_size, seed=seed * 100_000 + i) for i in range(n_batches)]
+
+
+# ---------------------------------------------------------------------------
+# Permutation composition corpus
+# ---------------------------------------------------------------------------
+#
+# Fourth corpus design. The first three failed the same way (`corpus-gate.md`): difficulty
+# jumped in a cliff rather than rising smoothly. Dyck was closer — partial credit exists —
+# but the closing brackets are deterministic given the openings, so the model doesn't need
+# to *use* nesting depth, just pattern-match.
+#
+# Permutation composition has no shortcut: you must apply each sigma in order. The answer
+# at position k depends on everything before it. Intermediates are never emitted, so the
+# model MUST compose — a 1-layer model cannot chain stepwise across positions.
+#
+#     [PERM] x0 σ1 σ2 ... σk [ANSWER] y     with  y = σk(...σ2(σ1(x0)))
+#
+# Key property: permutations are non-contracting (bijections), so the answer depends on the
+# full chain — unlike arbitrary maps which can collapse. This is the property the doc
+# identified as potentially escaping memorization.
+#
+# Difficulty knob: `chain_len`. Partial credit is available (getting the first few
+# compositions right is worth something), so the loss should move smoothly.
+
+PERM_TOKEN, PERM_ANSWER = 0, 1
+
+
+@dataclass(frozen=True)
+class PermSpec:
+    """Permutation composition corpus. `chain_len` is the difficulty dial."""
+
+    vocab_size: int = 64
+    seq_len: int = 256
+    set_size: int = 4           # elements: 0..set_size-1
+    n_perms: int = 8            # permutations to use (subset of S_set_size)
+    chain_len: int = 4          # permutations to compose per chain
+    n_chains: int = 3           # chains per sequence
+    zipf_alpha: float = 1.2
+    seed: int = 0
+
+    @property
+    def width(self) -> int:
+        """Tokens one chain occupies: [PERM] x0 σ... [ANSWER] y."""
+        return self.chain_len + 4
+
+    @property
+    def n_filler(self) -> int:
+        return self.vocab_size - 2 - self.set_size - self.n_perms
+
+    @property
+    def elem_base(self) -> int:
+        return 2  # after PERM_TOKEN, PERM_ANSWER
+
+    @property
+    def perm_base(self) -> int:
+        return 2 + self.set_size
+
+    @property
+    def filler_base(self) -> int:
+        return 2 + self.set_size + self.n_perms
+
+
+def permutation_table(spec: PermSpec) -> Tensor:
+    """(n_perms, set_size) — each row is a permutation of 0..set_size-1, fixed per seed."""
+    g = torch.Generator().manual_seed(spec.seed + 7919)
+    table = torch.empty(spec.n_perms, spec.set_size, dtype=torch.long)
+    for p in range(spec.n_perms):
+        table[p] = torch.randperm(spec.set_size, generator=g)
+    return table
+
+
+def perm_filler_chain(spec: PermSpec) -> Tensor:
+    g = torch.Generator().manual_seed(spec.seed)
+    n = spec.n_filler
+    zipf = torch.arange(1, n + 1, dtype=torch.float) ** -spec.zipf_alpha
+    return torch.softmax(torch.rand(n, n, generator=g) * 2.0 + zipf.log().unsqueeze(0), dim=-1)
+
+
+def generate_permutations(
+    spec: PermSpec, n_seqs: int, seed: int | None = None
+) -> tuple[Tensor, Tensor]:
+    """Return (tokens, target_mask). The mask marks answer positions only."""
+    g = torch.Generator().manual_seed(spec.seed if seed is None else seed)
+    perms = permutation_table(spec)
+    trans = perm_filler_chain(spec)
+
+    cells = spec.seq_len // spec.width
+    if cells < spec.n_chains:
+        raise ValueError(
+            f"n_chains={spec.n_chains} of width {spec.width} needs seq_len >= "
+            f"{spec.n_chains * spec.width}, got {spec.seq_len}"
+        )
+
+    tokens = torch.empty(n_seqs, spec.seq_len, dtype=torch.long)
+    state = torch.randint(spec.n_filler, (n_seqs,), generator=g)
+    for t in range(spec.seq_len):
+        tokens[:, t] = state + spec.filler_base
+        state = torch.multinomial(trans[state], 1, generator=g).squeeze(-1)
+
+    mask = torch.zeros(n_seqs, spec.seq_len, dtype=torch.bool)
+    for i in range(n_seqs):
+        for cell in torch.randperm(cells, generator=g)[: spec.n_chains]:
+            start = int(cell) * spec.width
+            x = int(torch.randint(spec.set_size, (1,), generator=g))
+            picks = torch.randint(spec.n_perms, (spec.chain_len,), generator=g)
+
+            tokens[i, start] = PERM_TOKEN
+            tokens[i, start + 1] = spec.elem_base + x
+            for j, p in enumerate(picks):
+                tokens[i, start + 2 + j] = spec.perm_base + int(p)
+                x = int(perms[int(p), x])  # apply permutation; intermediate never emitted
+            tokens[i, start + 2 + spec.chain_len] = PERM_ANSWER
+            tokens[i, start + 3 + spec.chain_len] = spec.elem_base + x
+            mask[i, start + 3 + spec.chain_len] = True
+
+    return tokens, mask
+
+
+def perm_batches(
+    spec: PermSpec, batch_size: int, n_batches: int, seed: int
+) -> list[tuple[Tensor, Tensor]]:
+    return [generate_permutations(spec, batch_size, seed=seed * 100_000 + i) for i in range(n_batches)]
+
+
+def build_corpus(cfg: dict[str, object]) -> CorpusSpec | ChainSpec | DyckSpec | PermSpec:
+    """Turn an ablation config's `corpus:` block into a spec, dispatching on `type`.
+
+    Defaults to the recall corpus so existing configs keep working unchanged. Without this the
+    runners each hard-coded CorpusSpec, so a new corpus could not reach an existing ablation.
+    """
+    fields = {k: v for k, v in cfg.items() if k != "type"}
+    kind = cfg.get("type", "recall")
+    if kind == "dyck":
+        return DyckSpec(**fields)
+    if kind == "chain":
+        return ChainSpec(**fields)
+    if kind == "perm":
+        return PermSpec(**fields)
+    if kind == "recall":
+        return CorpusSpec(**fields)
+    raise ValueError(f"unknown corpus type: {kind!r} (expected 'recall', 'chain', 'dyck' or 'perm')")

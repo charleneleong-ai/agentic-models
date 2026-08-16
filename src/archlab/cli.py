@@ -8,7 +8,15 @@ from pathlib import Path
 import typer
 
 from archlab import corpus_gate
-from archlab.ablations import activation_bound, attn_res, depth_sweep, qb_scale
+from archlab.ablations import (
+    activation_bound,
+    attn_res,
+    depth_sweep,
+    hybrid_ratio,
+    kda_state_capacity,
+    qb_scale,
+    scale_ladder,
+)
 
 app = typer.Typer(add_completion=False, help=__doc__)
 
@@ -17,6 +25,10 @@ RUNNERS = {
     "attn-res": attn_res.run,
     "attn-res-depth": depth_sweep.run,
     "activation-bound": activation_bound.run,
+    "attn-res-dyck": depth_sweep.run,
+    "attn-res-scale": scale_ladder.run,
+    "kda-state-capacity": kda_state_capacity.run,
+    "hybrid-ratio": hybrid_ratio.run,
 }
 
 
@@ -40,10 +52,6 @@ def ablate(
     typer.echo(f"{len(rows)} rows -> {out_root / name / 'results.jsonl'}")
 
 
-if __name__ == "__main__":
-    app()
-
-
 @app.command()
 def gate(
     check: str = typer.Argument(..., help="envelope | depth"),
@@ -60,5 +68,17 @@ def gate(
         corpus_gate.chain_length_envelope()
     elif check == "depth":
         corpus_gate.depth_at_the_cliff(chain_len=chain_len, steps=steps)
+    elif check == "dyck":
+        corpus_gate.dyck_depth_gate(depth=chain_len, steps=steps)
+    elif check == "dyck-nesting":
+        corpus_gate.dyck_nesting_envelope(steps=steps)
+    elif check == "dyck-stability":
+        corpus_gate.dyck_stability(depth=chain_len)
+    elif check == "dyck-converged":
+        corpus_gate.dyck_converged_envelope(steps=steps)
     else:
-        raise typer.BadParameter("check must be 'envelope' or 'depth'")
+        raise typer.BadParameter("check must be 'envelope', 'depth', 'dyck' or 'dyck-nesting'")
+
+
+if __name__ == "__main__":
+    app()

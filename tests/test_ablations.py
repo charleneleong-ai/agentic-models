@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+
+from archlab.ablations.scale_ladder import resolvable
+
 from pathlib import Path
 
 import pytest
@@ -110,3 +113,29 @@ class TestConfigMatchesRunner:
         for arm in cfg["arms"]:
             for variant in expand_arms(arm):
                 assert len(run_arm(variant, scores, cell, 2)) == 3
+
+
+class TestOnlyResolvableOrderingsCount:
+    """A gap smaller than the seed spread underneath it is not an ordering.
+
+    The first ladder run swapped the two AttnRes arms between widths and the naive
+    all-or-nothing check called it a rank flip. Their gap was 0.0064-0.0127 against seed spreads
+    of 0.0081-0.0283, so every one of those orderings was noise — the ladder was about to report
+    a false negative against its own primary finding.
+    """
+
+    def test_gap_under_the_noise_is_not_resolvable(self) -> None:
+        assert not resolvable(gap=0.0064, spread_a=0.0081, spread_b=0.0010)
+
+    def test_gap_clear_of_the_noise_is_resolvable(self) -> None:
+        """The real width-512 cell: residual vs attnres-block-4. It passes, but by 0.0006 —
+        a 1.03x margin over the noise. Pinned with the actual numbers because 'resolvable' here
+        means 'just barely', and a later change that widens the noise slightly would silently
+        flip the ladder's headline verdict."""
+        assert resolvable(gap=0.0225, spread_a=0.0005, spread_b=0.0219)
+        assert not resolvable(gap=0.0225, spread_a=0.0005, spread_b=0.0230)
+
+    def test_the_noisier_arm_sets_the_bar(self) -> None:
+        """Whichever arm is noisier governs — a tight arm cannot rescue a swingy one."""
+        assert resolvable(gap=0.02, spread_a=0.001, spread_b=0.001)
+        assert not resolvable(gap=0.02, spread_a=0.001, spread_b=0.05)

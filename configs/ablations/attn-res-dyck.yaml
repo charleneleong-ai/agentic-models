@@ -1,0 +1,71 @@
+# The depth-axis question, finally on a corpus where depth matters.
+#
+# attn-res-depth could not answer "how much of K3's 2.5x is the depth axis" because its corpus
+# was depth-saturated — an 8x depth increase moved the baseline +0.006, so a depth mechanism
+# could only cost. Two corpus designs later, Dyck clears the gate (dyck-corpus.md): at nesting
+# depth 64 the residual baseline shows real improvement across depths, with a noise floor of
+# 0.085 giving 13:1 resolvable ratio.
+#
+# Same arms, same measured quantity — the GAP to residual at matched depth and seed, because
+# absolute loss falls with depth for every arm. What differs is only that the gap is now
+# interpretable: a mechanism that helps has room to show it.
+#
+# Operating point: nesting 64, 2400 steps, seq_len 576. This is the converged budget where
+# the task is hard (1.13 loss vs chance 2.079) but learnable, with a measured noise floor.
+# See dyck-corpus.md for the full characterisation.
+
+name: attn-res-dyck
+question: How much of the 2.5x is the depth axis, on a corpus where depth pays?
+primitive: archlab.depth.attn_res
+requires_training: true
+
+sweep:
+  n_layers: [6, 12, 24, 48]
+
+arms:
+  - id: residual
+    depth_mixing: residual
+  - id: attnres-full
+    depth_mixing: full
+  - id: attnres-block-6
+    depth_mixing: block
+    block_size: 6                  # n_blocks = n_layers / 6 -> 1, 2, 4, 8 (K3's 8 at L=48)
+
+model:
+  d_model: 128
+  n_heads: 4
+  d_head: 32
+  d_hidden: 512
+  attention: kda
+  chunk_size: 64                   # corpus seq_len must stay a multiple of this
+  ffn: situ_glu
+
+corpus:
+  type: dyck
+  vocab_size: 64
+  seq_len: 576                     # nesting 64 requires this (4 * (2*64+1) = 516, rounded to 576 for chunk alignment)
+  n_types: 8
+  depth: 64                        # the converged operating point: hard, learnable, depth-sensitive
+  n_groups: 2
+
+train:
+  steps: 2400                      # converged budget — nesting 16 solved at this, nesting 64 has 1.13 loss
+  batch_size: 16
+  lr: 3.0e-4
+  schedule: cosine
+  warmup_frac: 0.02
+  weight_decay: 0.1
+  seeds: [0, 1]
+
+metrics:
+  primary: gap_vs_residual
+  gap_on: val_recall_loss          # close-bracket loss — the depth-requiring half on Dyck.
+                                   # local loss here is Markov filler and depth-insensitive,
+                                   # which is exactly what made the previous corpus useless.
+  also:
+    - val_recall_loss              # the close-bracket loss — the depth-requiring half
+    - val_markov_loss
+    - n_params
+    - peak_live_sources
+
+report: docs/experiments/attn-res-dyck.md

@@ -62,7 +62,7 @@ train:
 metrics:
   primary: gap_vs_residual         # (arm local loss) - (residual local loss), same depth+seed
   also:
-    - val_local_loss
+    - val_markov_loss
     - val_recall_loss              # expected to stay dead; see attn-res.md
     - n_params
     - peak_live_sources

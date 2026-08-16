@@ -10,6 +10,9 @@ dependencies = [
     "typer>=0.15",
 ]
 
+[project.optional-dependencies]
+wandb = ["wandb>=0.18"]
+
 [project.scripts]
 archlab = "archlab.cli:app"
 
@@ -37,7 +40,11 @@ target-version = "py313"
 
 [tool.ruff.lint]
 # Complexity-only gate: keeps functions small without churning existing style.
-select = ["C901", "PLR0915"]
+# Complexity, plus pyflakes and unused-arguments. F401 was added after an import of
+# `mup_param_groups` sat unused in the training loop for three commits: the muP experiment
+# compared two arms that were silently identical, and reported a negative result from it. A
+# complexity-only gate cannot see that class of error, and it costs 3 fixes to close.
+select = ["C901", "PLR0915", "F", "ARG"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
