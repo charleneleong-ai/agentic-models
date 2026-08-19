@@ -80,14 +80,28 @@ outright at n=896 (2.396 vs 2.622 for no balancing at all). Two consequences wor
 The mechanism is the target load. Each expert should receive `mk/n` tokens — 4,096 at n=64 but
 only 292 at n=896. As `n` grows the required quantile moves further into the tail of the score
 distribution, where the saturated mass sits, so the same tie fraction bites progressively
-harder. **Router temperature is therefore not a free hyperparameter at K3's 896-expert scale —
-it is a precondition for balancing to work at all**, and K3 routes with a sigmoid.
+harder.
+
+> **Superseded.** This section originally concluded that router temperature *"is not a free
+> hyperparameter at K3's 896-expert scale — it is a precondition for balancing to work at all"*.
+> [`trained-router`](trained-router.md) tested that by training routers by gradient descent and
+> measuring the precondition directly: at K3's exact configuration (896 routed, 16 active) a
+> trained router shows **0.0000 saturation and 0.0000 ties**, with no trend across a 112x range
+> of expert counts. The tie regime is not reached, so there is nothing for temperature to fix.
+>
+> What survives is everything above the leap: the tie sensitivity *is* real as a property of the
+> quantile estimator given tied inputs, the target-load mechanism explaining why it worsens with
+> `n` is unchanged, and the numbers below stand. What does not survive is the inference from an
+> imposed input regime to a claim about routers at scale — the first caveat below turned out to
+> be the load-bearing one.
 
 ## Caveats
 
 - Synthetic routers. Saturation is imposed via `router_scale`, not observed in a trained model;
-  a real router may never reach 1.9% pinned scores. What transfers is the *interaction* — that
-  tie sensitivity scales with `n` — not the specific threshold.
+  a real router may never reach 1.9% pinned scores. **This caveat was correct and was the one
+  that mattered** — [`trained-router`](trained-router.md) measured it and found trained routers
+  sit 3-5x in logit scale below tie onset. The interaction with `n` is real within the tied
+  regime; reaching that regime is the part that does not hold.
 - Load imbalance is a proxy for the thing that matters. It measures the systems cost directly,
   but says nothing about whether balanced experts are *better specialized*, which is the open
   question in [`moe-load-balancing.md`](../primitives/moe-load-balancing.md).
@@ -95,9 +109,11 @@ it is a precondition for balancing to work at all**, and K3 routes with a sigmoi
 
 ## Next move
 
-- Measure tie fraction in a **trained** router to see whether the saturated regime is reachable
-  in practice. If it is not, this is a curiosity; if it is, it is a design constraint.
-- Add a temperature arm — does dividing router logits by `T > 1` restore QB at n=896 saturated?
-  That would turn the finding into a fix.
+- ~~Measure tie fraction in a **trained** router~~ — done: [`trained-router`](trained-router.md).
+  The saturated regime is not reachable, so this is the curiosity branch.
+- ~~Add a temperature arm~~ — moot. There is no saturation to correct.
+- **Explain the residual imbalance instead.** `trained-router` found load imbalance under QB
+  rising 1.145 -> 2.188 from 8 to 896 experts *without* ties, so the difficulty K3 cites is real
+  and has a cause this ablation has not identified.
 - The `steps_to_within_5pct` growth (1 → 5) is QB's own scale cost and deserves its own look:
   it is mild, but it is not flat, and the report implies it is.

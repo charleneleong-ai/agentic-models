@@ -1,0 +1,86 @@
+# Does the attn-res *ranking* survive growing the model?
+#
+# [`attn-res`](attn-res.yaml) found that a plain residual stream beats attention-over-depth at
+# 12 layers and 128 width. That is a claim about learned model quality, which is exactly the
+# class the validity-threat literature says may not transfer: proxy rankings can fail between
+# 125M and 1B, so a result at 3M parameters is not evidence about a 93-layer model. The finding
+# was flagged in README as the one most exposed to that threat.
+#
+# This grows the width and asks whether the ordering of the arms holds. What is measured is the
+# *ranking*, not the loss — losses must change with width, and a ladder that reported them would
+# be measuring capacity. If residual wins at every rung, the original finding survives its main
+# threat. If the ordering flips, the original finding was scale-specific and should be re-scoped.
+#
+# Why this is only runnable now. Under Standard Parametrization the optimal learning rate drifts
+# with width (measured: 1e-2 at 128 and 256, 3e-3 at 512), so a fixed-LR ladder trains its wider
+# rungs wrong and a rank flip cannot be told apart from the optimizer being mistuned. muP fixes
+# the optimum in place and is verified here to do so — see docs/experiments/mup-attempt.md. The
+# ladder inherits that guarantee, which is the whole reason it can hold one learning rate.
+#
+# The base learning rate is still tuned once, at the base width, because muP transfers across
+# *width* and this ladder holds depth at 12 while the muP check ran at depth 4. Tuning at the
+# ladder's own depth and letting muP carry it across widths is the intended use of muTransfer,
+# not a shortcut around it.
+
+name: attn-res-scale
+question: Does the attn-res ranking survive a 4x width increase?
+primitive: archlab.depth.attn_res
+requires_training: true
+
+widths: [128, 256, 512]            # muP is verified over exactly this range, not beyond it
+base_width: 128                    # m = 1 here, so this rung is SP and muP by construction
+
+arms:
+  - id: residual
+    depth_mixing: residual
+  - id: attnres-full
+    depth_mixing: full
+  - id: attnres-block-4
+    depth_mixing: block
+    n_blocks: 4
+
+# Sweep at the base width only. muP's claim is that the winner here is the winner everywhere,
+# so tuning per-width would discard the property under test rather than control for it.
+lr_search: [3.0e-3, 1.0e-2, 3.0e-2]
+
+model:
+  n_layers: 12                     # fixed: muP is verified for width, NOT depth (Tensor
+                                   # Programs VI is not implemented here), so varying depth
+                                   # would reintroduce the confound this ladder exists to remove
+  head_dim: 32                     # n_heads derives as d_model // head_dim, so heads scale with
+                                   # width and per-head dimension stays fixed — the convention
+                                   # muP's width multiplier assumes
+  hidden_mult: 4                   # d_hidden = 4 * d_model
+  attention: kda
+  chunk_size: 64
+  ffn: situ_glu
+  mup: true
+
+corpus:                            # identical to attn-res: the point is to move width and
+  vocab_size: 64                   # nothing else
+  seq_len: 256
+  n_pairs: 4
+  key_vocab: 16
+
+train:
+  steps: 600
+  batch_size: 16
+  schedule: cosine
+  warmup_frac: 0.02
+  weight_decay: 0.1
+  # Five, not two. With two seeds the "spread" is a two-sample range, and four of six margins
+  # in the first run cleared that range by under 1.25x — so no individual comparison carried the
+  # result and the verdict rested on 6/6 consistency alone. Five makes the noise estimate mean
+  # something, and is the only way to say anything about why the AttnRes arms get *less*
+  # seed-stable as width grows (spread 0.0010 -> 0.0283 for attnres-full over 128 -> 512).
+  seeds: [0, 1, 2, 3, 4]
+
+metrics:
+  primary: val_markov_loss
+  also:
+    - val_recall_loss
+    - n_params
+  # The ladder's actual output. Per-width losses are inputs to this, not results in themselves.
+  ranking: spearman_across_widths
+
+report: docs/experiments/attn-res-scale.md

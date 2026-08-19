@@ -57,7 +57,7 @@ train:
   seeds: [0, 1]                    # depth-mixing deltas are small; report spread, not a point
 
 metrics:
-  primary: val_local_loss
+  primary: val_markov_loss
   also:
     - val_recall_loss              # the long-range half — where depth mixing should matter most
     - n_params                     # AttnRes adds n_layers*d_model; check it is not buying capacity

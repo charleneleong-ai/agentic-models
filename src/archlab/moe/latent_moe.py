@@ -37,7 +37,6 @@ from torch import Tensor, nn
 
 from archlab.activations.situ_glu import SiTUGLU
 from archlab.moe.quantile_balance import (
-    histogram_quantile_bias,
     quantile_balance_update,
     routing_scores,
     topk_route,

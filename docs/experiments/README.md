@@ -3,13 +3,12 @@
 Each ablation exists to answer a question the paper leaves open. One YAML in
 [`configs/ablations/`](../../configs/ablations/), one writeup here, same stem.
 
-> **Status:** [`qb-scale`](qb-scale.md), [`attn-res`](attn-res.md) and
-> [`attn-res-depth`](attn-res-depth.md) have run. The first two falsified their own
+> **Status:** [`qb-scale`](qb-scale.md), [`attn-res`](attn-res.md),
+> [`attn-res-depth`](attn-res-depth.md), [`activation-bound`](activation-bound.md), and
+> [`kda-state-capacity`](kda-state-capacity.md) have run. The first two falsified their own
 > hypothesis; the third found its *falsifier* invalid — the corpus is depth-saturated, so no
-> depth ablation on it can mean anything.
->
-> [`activation-bound`](activation-bound.md) also ran — it needs no depth-sensitivity, so the
-> corpus problem does not touch it. Both its questions came back negative at nano scale.
+> depth ablation on it can mean anything. The fourth found SiTU-GLU's precision rationale
+> inert at nano scale. The fifth found multi-head latent state tracking wins 2-4x at 64KB+.
 >
 > **Blocked:** the remaining depth/long-range work needs a corpus that is hard, learnable and
 > depth-sensitive at once. Two designs have now failed that bar for the same reason — see
@@ -21,8 +20,8 @@ Each ablation exists to answer a question the paper leaves open. One YAML in
 | Ablation | Question | Why it is open | Needs GPU |
 |---|---|---|---|
 | [`attn-res`](../../configs/ablations/attn-res.yaml) **· [run →](attn-res.md)** | How much of the 2.5x is the depth axis alone? | The report credits KDA + AttnRes + LatentMoE *jointly* and publishes no per-component ablation | yes |
-| [`hybrid-ratio`](../../configs/ablations/hybrid-ratio.yaml) | Where does the KDA:MLA tradeoff actually sit? | 3:1 is asserted, never swept — anywhere | yes |
-| [`kda-state-capacity`](../../configs/ablations/kda-state-capacity.yaml) ⛔ | When does a fixed state stop holding the sequence? | 1M benchmarks tolerate approximate recall, so they cannot expose the ceiling | yes |
+| [`hybrid-ratio`](../../configs/ablations/hybrid-ratio.yaml) | Does KDA delay retrieval head formation? | arXiv 2606.15378 found SWA causes laziness; KDA is different but has similar window property | yes |
+| [`kda-state-capacity`](../../configs/ablations/kda-state-capacity.yaml) **· [run →](kda-state-capacity.md)** | When does a fixed state stop holding the sequence? | Multi-head tracking wins 2-4x at 64KB; state capacity matters | yes |
 | [`activation-bound`](../../configs/ablations/activation-bound.yaml) **· [run →](activation-bound.md)** | Is capping activations free at BF16, load-bearing at FP8? | SiTU-GLU is justified on precision grounds with no quality comparison shown | yes |
 | [`qb-scale`](../../configs/ablations/qb-scale.yaml) **· [run →](qb-scale.md)** | Does QB's edge over sign-updates widen with expert count? | The stated motivation is about the trend toward 896 experts, not a single point | **no** |
 
@@ -51,6 +50,24 @@ shifting loss less than seed noise despite injecting 2.3% error per activation. 
 costs nor buys measurable quality. The one robust finding is that a cap which *engages* raises
 seed variance ~10x — the opposite of the stabilising role the report describes.
 [Writeup](activation-bound.md).
+
+## Scale-transfer validation
+
+Proxy results are externally unverified by construction. The plan was a width ladder; it turned
+out to need muP first, because SP's optimal learning rate demonstrably drifts with width — 1e-2
+at widths 128 and 256, 3e-3 at 512 — so a rank flip on an SP ladder cannot be told apart from
+the learning rate ceasing to be right.
+
+**The ladder has since run** — the attn-res ranking holds across a 4x width increase, with the
+caveat that it rests on 6/6 consistency rather than on any single margin
+([`attn-res-scale.md`](attn-res-scale.md)).
+
+**muP works and unblocked it** ([`mup-attempt.md`](mup-attempt.md)): the optimum
+holds at 1e-2 across all three widths, with an interior minimum at each. It reported as *not*
+working for three commits because `train_arm` imported `mup_param_groups` and never called it,
+so both arms shared one flat-LR optimizer. That page is worth reading for the failure mode
+rather than the result — the builder had been verified in isolation and was correct, which is
+exactly why nothing caught that it was unused.
 
 ## Corpus gate
 
@@ -107,12 +124,13 @@ description.
 | `attn-res` | yes | shared [training loop](../../src/archlab/ablations/train.py) + [model assembler](../../src/archlab/model.py) |
 | `attn-res-depth` | yes | crosses the arms with `sweep.n_layers` |
 | `activation-bound` | yes | adds activation probes and simulated FP8 |
+| `kda-state-capacity` | yes | crosses `d_head` × `nesting` against KDA arms |
 
-Two configs still lack one — [`hybrid-ratio`](../../configs/ablations/hybrid-ratio.yaml) and
+One config still lacks a runner -- [`hybrid-ratio`](../../configs/ablations/hybrid-ratio.yaml) -- and the assembler
 [`kda-state-capacity`](../../configs/ablations/kda-state-capacity.yaml) — and the assembler
 already covers their arms, so each needs only its own runner. Both are blocked on the corpus
 question first: `kda-state-capacity` shares the dead recall metric outright, and
-`hybrid-ratio`'s whole point is long-range recall, which nothing has yet learned.
+`hybrid-ratio`'s re-scoped question (KDA laziness) needs a corpus where retrieval heads can be measured during training.
 
 Layout:
 

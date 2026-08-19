@@ -66,7 +66,7 @@ def run(config_path: Path, out_dir: Path, device: str = "cpu") -> list[dict[str,
             row = {"arm": arm["id"], "seed": seed, **metrics}
             results.append(row)
             print(
-                f"{arm['id']:>16} seed={seed}  local={row['val_local_loss']:.4f} "
+                f"{arm['id']:>16} seed={seed}  local={row['val_markov_loss']:.4f} "
                 f"recall={row['val_recall_loss']:.4f} params={row['n_params']:,} "
                 f"sources={row['peak_live_sources']}"
             )

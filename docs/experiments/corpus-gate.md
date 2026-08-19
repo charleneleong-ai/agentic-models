@@ -90,9 +90,9 @@ The finding that survives intact is the *relative* one: full AttnRes's cost grow
 with depth than blocked AttnRes's. That is a comparison between two AttnRes variants under
 identical conditions, and it does not depend on depth paying off.
 
-## Why I am stopping rather than trying corpus #3
+## Why I am stopping rather than trying corpus #4
 
-Two designs have failed for the same reason, and the reason is not a parameter I can nudge.
+Three designs have failed for the same reason, and the reason is not a parameter I can nudge.
 Candidate fixes and why each is unconvincing at this scale:
 
 - **Shorter chains (length 3).** Likely lands in the memorization regime, so depth stays
@@ -106,6 +106,35 @@ Candidate fixes and why each is unconvincing at this scale:
 Running the sweep now would yield clean-looking numbers on a task where no arm learns the thing
 being measured — the same error as `attn-res-depth`, repeated after being warned by it.
 
+## Permutation composition: corpus #3 (2026-08-08)
+
+Iterated permutations (non-contracting bijections) instead of arbitrary maps. The hypothesis
+was that non-contracting chains prevent the memorization shortcut — every step must be applied,
+so the answer depends on the full chain.
+
+**Chain length envelope** (12 layers, residual, 600 steps unless noted):
+
+| chain_len | steps | compose loss | Status |
+|-----------|-------|-------------|--------|
+| 1 | 600 | 0.0015 | Solved |
+| 2 | 600 | 0.0025 | Solved |
+| 4 | 600 | 1.3897 | **Chance** (1.386) |
+| 8 | 600 | 1.3930 | **Chance** |
+| 4 | 2400 | 1.3476 | Still chance |
+| 8 | 2400 | 1.3912 | Still chance |
+
+**Same cliff as corpus #1.** The non-contracting property did not help. The model solves
+chain_len ≤ 2 outright, then fails completely at chain_len ≥ 4. Four times the training
+budget buys essentially nothing.
+
+Depth gate at chain_len=4 could not run (GPU contention), but the envelope alone is
+sufficient: the cliff is in the same place, so depth-gate results would be redundant.
+
+**What this eliminates:** the failure mode is not about contracting maps allowing memorization
+shortcuts. Permutations are the hardest possible composition task (bijections, every step
+irreversible), and the model still cannot compose at length 4. The limitation is more
+fundamental — likely the model's capacity to track state through sequential operations.
+
 ## What would unblock it
 
 A task that is **hard, learnable, and depth-sensitive** simultaneously. The gate is cheap and
@@ -117,6 +146,6 @@ Known families worth trying, in rough order of promise:
 
 1. **Dyck / nested brackets.** Depth-separation results are strongest here, and difficulty is
    tunable continuously by nesting depth rather than in a cliff.
-2. **Iterated permutation composition** (rather than arbitrary maps). Non-contracting, so the
-   answer depends on the full chain; whether it escapes memorization is the open question.
-3. **Graph reachability at controlled hop counts** — hop count maps to required depth directly.
+2. **Graph reachability at controlled hop counts** — hop count maps to required depth directly.
+3. **Bigger models.** Probably the real answer, and out of scope for a repo whose premise is
+   laptop-scale primitives.

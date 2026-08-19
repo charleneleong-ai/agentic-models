@@ -1,0 +1,57 @@
+# OOM recovery:5 runs that crashed at 48 layers with bs=16.
+# Same config as attn-res-dyck but batch_size=8 to fit48 layers in 80GB.
+# Only the missing combos will be run — results.jsonl is appended.
+
+name: attn-res-dyck
+question: How much of the 2.5x is the depth axis, on a corpus where depth pays?
+primitive: archlab.depth.attn_res
+requires_training: true
+
+sweep:
+  n_layers: [48]
+
+arms:
+  - id: residual
+    depth_mixing: residual
+  - id: attnres-full
+    depth_mixing: full
+  - id: attnres-block-6
+    depth_mixing: block
+    block_size: 6
+
+model:
+  d_model: 128
+  n_heads: 4
+  d_head: 32
+  d_hidden: 512
+  attention: kda
+  chunk_size: 64
+  ffn: situ_glu
+
+corpus:
+  type: dyck
+  vocab_size: 64
+  seq_len: 576
+  n_types: 8
+  depth: 64
+  n_groups: 2
+
+train:
+  steps: 2400
+  batch_size: 8                     # halved from 16 — OOM recovery for 48-layer runs
+  lr: 3.0e-4
+  schedule: cosine
+  warmup_frac: 0.02
+  weight_decay: 0.1
+  seeds: [0, 1]
+
+metrics:
+  primary: gap_vs_residual
+  gap_on: val_recall_loss
+  also:
+    - val_recall_loss
+    - val_markov_loss
+    - n_params
+    - peak_live_sources
+
+report: docs/experiments/attn-res-dyck.md

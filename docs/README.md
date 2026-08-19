@@ -15,6 +15,15 @@ in `docs/`.
 
 ## Current pages
 
+**Landscape**
+- [`landscape-sources.md`](landscape-sources.md) — every citation in the sweep, verified against
+  the live arXiv record, plus the claims that have **no** archived source. Search results are not
+  persisted by anything, so this file is the only thing standing between the sweep and trust.
+- [`landscape-2026.md`](landscape-2026.md) — where frontier agentic architectures, post-training
+  and harness co-design actually are, and **which of this repo's findings are corroborated,
+  anticipated or already known**. Read before designing another ablation: two of the five specs
+  turn out to duplicate published work.
+
 **Primitives**
 - [`moe-load-balancing.md`](primitives/moe-load-balancing.md) — auxiliary losses → expert
   choice → BASE/BIP → loss-free bias → Quantile Balancing, and why the dual's coordinate

@@ -25,7 +25,13 @@ from typing import Any
 import torch
 import yaml
 
-from archlab.ablations.train import TrainSpec, evaluate, lr_at, make_batches
+from archlab.ablations.train import (
+    TrainSpec,
+    enforce_determinism,
+    evaluate,
+    lr_at,
+    make_batches,
+)
 from archlab.data import CorpusSpec
 from archlab.model import ModelSpec, NanoLM, losses
 
@@ -60,6 +66,8 @@ def train_instrumented(
     Kept separate rather than folded into the shared loop: every other ablation would pay the
     probe's cost for numbers it never reads.
     """
+    if train_spec.deterministic:
+        enforce_determinism()
     torch.manual_seed(train_spec.seed)
     device = train_spec.device
     model = NanoLM(model_spec).to(device)
@@ -96,7 +104,7 @@ def train_instrumented(
 
     val_local, val_recall = evaluate(model, eval_data, device)
     return {
-        "val_local_loss": round(val_local, 4),
+        "val_markov_loss": round(val_local, 4),
         "val_recall_loss": round(val_recall, 4),
         "nonfinite_steps": nonfinite_steps,
         "grad_norm_spikes": grad_spikes,
@@ -142,7 +150,7 @@ def run(config_path: Path, out_dir: Path, device: str = "cpu") -> list[dict[str,
                 sink.flush()
                 print(
                     f"{precision:>8} seed={seed} {arm['id']:>14}  "
-                    f"local={row['val_local_loss']:.4f} max|h|={row['max_abs_activation']:>9.2f} "
+                    f"local={row['val_markov_loss']:.4f} max|h|={row['max_abs_activation']:>9.2f} "
                     f"fp8_over={row['fp8_overflow_frac']:.2e} spikes={row['grad_norm_spikes']} "
                     f"nonfinite={row['nonfinite_steps']}",
                     flush=True,

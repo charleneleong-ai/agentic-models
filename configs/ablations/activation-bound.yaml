@@ -74,7 +74,7 @@ train:
   seeds: [0, 1]
 
 metrics:
-  primary: val_local_loss
+  primary: val_markov_loss
   also:
     - max_abs_activation           # should sit at beta_gate*beta_up for capped arms
     - fp8_overflow_frac            # fraction above e4m3's 448 — the claimed failure mode
