@@ -23,14 +23,11 @@ from __future__ import annotations
 import math
 
 from archlab.ablations.train import TrainSpec, train_arm
-from archlab.data import ChainSpec, DyckSpec, PermSpec
+from archlab.data import ChainSpec, DyckSpec
 from archlab.model import ModelSpec
 
 D_MODEL, N_HEADS, D_HEAD, D_HIDDEN = 128, 4, 32, 512
 CHUNK_SIZE = 64  # KDA constraint: every corpus seq_len must be a multiple of this
-
-
-BLOCK_SIZE = 6  # matches configs/ablations/*.yaml, so gate and sweep build the same model
 
 
 def spec_for(n_layers: int, vocab_size: int) -> ModelSpec:
@@ -42,13 +39,7 @@ def spec_for(n_layers: int, vocab_size: int) -> ModelSpec:
         d_head=D_HEAD,
         d_hidden=D_HIDDEN,
         depth_mixing="residual",
-        # Mirrors how the sweep derives n_blocks from block_size, so gate and sweep build the
-        # *same* model. Inert for the residual arm — ResidualStack ignores it and has no
-        # parameters, so it does not even shift RNG consumption — but the two paths disagreeing
-        # is a latent bug: a `block` arm would silently get different blocking depending on
-        # which entry point constructed it.
-        n_blocks=max(1, n_layers // BLOCK_SIZE),
-        chunk_size=CHUNK_SIZE,
+        chunk_size=64,
     )
 
 
@@ -76,7 +67,7 @@ def chain_length_envelope() -> None:
         )
         m = run_one(12, corpus, steps)
         print(
-            f"{chain_len:>10} {steps:>7} {m['val_recall_loss']:>9.4f} {m['val_markov_loss']:>9.4f}",
+            f"{chain_len:>10} {steps:>7} {m['val_recall_loss']:>9.4f} {m['val_local_loss']:>9.4f}",
             flush=True,
         )
 
@@ -100,7 +91,7 @@ def depth_at_the_cliff(chain_len: int, steps: int) -> None:
     for n_layers in (6, 12, 24, 48):
         m = run_one(n_layers, corpus, steps)
         scores[n_layers] = m["val_recall_loss"]
-        print(f"{n_layers:>6} {scores[n_layers]:>9.4f} {m['val_markov_loss']:>9.4f}", flush=True)
+        print(f"{n_layers:>6} {scores[n_layers]:>9.4f} {m['val_local_loss']:>9.4f}", flush=True)
 
     shallow, deep = scores[6], scores[48]
     print(f"\n6 -> 48 layers: compose {deep - shallow:+.4f}")
@@ -126,7 +117,7 @@ def dyck_depth_gate(depth: int = 8, steps: int = 600) -> None:
     for n_layers in (6, 12, 24, 48):
         m = run_one(n_layers, corpus, steps)
         scores[n_layers] = m["val_recall_loss"]
-        print(f"{n_layers:>7} {scores[n_layers]:>9.4f} {m['val_markov_loss']:>9.4f}", flush=True)
+        print(f"{n_layers:>7} {scores[n_layers]:>9.4f} {m['val_local_loss']:>9.4f}", flush=True)
 
     shallow, deep = scores[6], scores[48]
     # Relative, not absolute. An absolute bar is wrong for a task whose whole range is small:
@@ -168,7 +159,7 @@ def dyck_nesting_envelope(steps: int = 600, n_layers: int = 6) -> None:
         corpus = DyckSpec(vocab_size=64, seq_len=seq_len, n_types=8, depth=depth, n_groups=2)
         m = run_one(n_layers, corpus, steps)
         print(
-            f"{depth:>8} {seq_len:>8} {m['val_recall_loss']:>9.4f} {m['val_markov_loss']:>9.4f}",
+            f"{depth:>8} {seq_len:>8} {m['val_recall_loss']:>9.4f} {m['val_local_loss']:>9.4f}",
             flush=True,
         )
 
@@ -226,69 +217,3 @@ def dyck_converged_envelope(steps: int = 2400, repeats: int = 2) -> None:
             flush=True,
         )
     print("\nWant: mean well above the floor, floor well below the gaps worth detecting.")
-
-
-# ---------------------------------------------------------------------------
-# Permutation composition corpus gates
-# ---------------------------------------------------------------------------
-#
-# The permutation corpus is the fourth attempt at a task where depth is genuinely required.
-# The key property: permutations are non-contracting (bijections), so the answer depends on
-# the full chain — unlike arbitrary maps which can collapse.
-#
-# These gates test whether this property actually helps at nano scale.
-
-def perm_chain_length_envelope(steps: int = 600, n_layers: int = 12) -> None:
-    """Hold depth fixed, sweep chain length. Finds what is learnable at all.
-
-    Same logic as the chain corpus envelope: if short chains are learned and long ones are
-    not, difficulty is the binding constraint and there is a usable middle.
-    """
-    print("=== perm chain-length envelope (residual, 12 layers) ===")
-    print(f"chance = ln(4) = {math.log(4):.3f}; a solved chain should approach 0\n")
-    print(f"{'chain_len':>10} {'steps':>7} {'compose':>9} {'local':>9}")
-    for chain_len, steps in ((1, 600), (2, 600), (4, 600), (8, 600), (4, 2400), (8, 2400)):
-        corpus = PermSpec(
-            vocab_size=64, seq_len=256, set_size=4, n_perms=8,
-            chain_len=chain_len, n_chains=3,
-        )
-        m = run_one(n_layers, corpus, steps)
-        print(
-            f"{chain_len:>10} {steps:>7} {m['val_recall_loss']:>9.4f} {m['val_markov_loss']:>9.4f}",
-            flush=True,
-        )
-
-
-def perm_depth_gate(chain_len: int = 4, steps: int = 600) -> None:
-    """The gate: does adding layers help predict composed permutations?
-
-    Same bar as before — a corpus is only usable for a depth ablation if plain depth buys
-    something on it. The permutation corpus's bet is that non-contracting composition
-    escapes the memorization trap that killed the chain corpus.
-    """
-    corpus = PermSpec(
-        vocab_size=64, seq_len=256, set_size=4, n_perms=8,
-        chain_len=chain_len, n_chains=3,
-    )
-    print(f"=== perm depth gate (chain_len={chain_len}, {steps} steps) ===")
-    print(f"chance = ln({corpus.set_size}) = {math.log(corpus.set_size):.3f}; solved approaches 0\n")
-    print(f"{'layers':>7} {'compose':>9} {'local':>9}")
-
-    scores = {}
-    for n_layers in (6, 12, 24, 48):
-        m = run_one(n_layers, corpus, steps)
-        scores[n_layers] = m["val_recall_loss"]
-        print(f"{n_layers:>7} {scores[n_layers]:>9.4f} {m['val_markov_loss']:>9.4f}", flush=True)
-
-    shallow, deep = scores[6], scores[48]
-    reduction = (shallow - deep) / max(shallow, 1e-9)
-    print(f"\n6 -> 48 layers: compose {deep - shallow:+.4f}  ({reduction:.0%} reduction)")
-    if reduction < 0.25:
-        print("GATE FAILS — depth does not meaningfully help")
-    elif shallow < 0.2:
-        print(
-            f"GATE PARTIAL — depth helps ({reduction:.0%}) but the shallow baseline is already "
-            f"at {shallow:.3f}; too little headroom for a clean ablation. Raise chain_len."
-        )
-    else:
-        print("GATE PASSES — depth helps and there is headroom to measure it")

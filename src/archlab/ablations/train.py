@@ -8,8 +8,7 @@ drawing luckier samples.
 from __future__ import annotations
 
 import math
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -19,21 +18,11 @@ from archlab.data import (
     ChainSpec,
     CorpusSpec,
     DyckSpec,
-    PermSpec,
     batches,
     chain_batches,
     dyck_batches,
-    perm_batches,
 )
 from archlab.model import ModelSpec, NanoLM, losses
-from archlab.mup import mup_param_groups
-
-try:
-    import wandb as _wandb
-
-    _WANDB_AVAILABLE = True
-except ImportError:
-    _WANDB_AVAILABLE = False
 
 
 @dataclass
@@ -46,13 +35,9 @@ class TrainSpec:
     eval_batches: int = 8
     seed: int = 0
     device: str = "cpu"
-    deterministic: bool = True
-    wandb_project: str | None = None
-    wandb_run_name: str | None = None
-    wandb_config: dict[str, Any] = field(default_factory=dict)
 
 
-Corpus = CorpusSpec | ChainSpec | DyckSpec | PermSpec
+Corpus = CorpusSpec | ChainSpec | DyckSpec
 
 
 def make_batches(
@@ -63,27 +48,7 @@ def make_batches(
         return dyck_batches(corpus, batch_size, n_batches, seed)
     if isinstance(corpus, ChainSpec):
         return chain_batches(corpus, batch_size, n_batches, seed)
-    if isinstance(corpus, PermSpec):
-        return perm_batches(corpus, batch_size, n_batches, seed)
     return batches(corpus, batch_size, n_batches, seed)
-
-
-def enforce_determinism() -> None:
-    """Make runs bit-reproducible across *processes*, not just within one.
-
-    Measured on an A100: the same config and seed, run in three separate processes, spanned
-    0.20 in final loss — against 0.038 for three runs inside a single process. Non-deterministic
-    CUDA kernels (atomics, per-process algorithm selection) are the cause. With this enabled the
-    same three processes agreed to four decimal places.
-
-    On by default because an ablation is a *comparison between runs*. A harness that is only
-    reproducible within one process silently invalidates every cross-invocation comparison, and
-    the failure is invisible — it looks like an effect. The cost is speed, which is a real
-    tradeoff for production training and cheap insurance for a measurement tool.
-    """
-    torch.use_deterministic_algorithms(True, warn_only=True)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
 
 def lr_at(step: int, spec: TrainSpec) -> float:
@@ -110,47 +75,22 @@ def evaluate(model: NanoLM, data: list[tuple[Tensor, Tensor]], device: str) -> t
 
 def train_arm(model_spec: ModelSpec, train_spec: TrainSpec, corpus: CorpusSpec) -> dict[str, Any]:
     """Train one arm and return its metrics. Deterministic given the seeds."""
-    if train_spec.deterministic:
-        enforce_determinism()
     torch.manual_seed(train_spec.seed)
     device = train_spec.device
     model = NanoLM(model_spec).to(device)
-
-    # wandb logging (optional — skips gracefully if not installed or no auth)
-    wb_run = None
-    if train_spec.wandb_project and _WANDB_AVAILABLE:
-        wb_run = _wandb.init(
-            project=train_spec.wandb_project,
-            name=train_spec.wandb_run_name,
-            config={
-                **train_spec.wandb_config,
-                "seed": train_spec.seed,
-                "device": device,
-                "n_params": model.n_params(),
-            },
-        )
-
-    # Under muP the learning rate is per-parameter-class, so the optimum holds still as width
-    # changes and a width ladder measures the mechanism rather than the parametrization.
-    params = (
-        mup_param_groups(model, model.width_mult, train_spec.lr, train_spec.weight_decay)
-        if model_spec.mup
-        else model.parameters()
+    opt = torch.optim.AdamW(
+        model.parameters(), lr=train_spec.lr, weight_decay=train_spec.weight_decay
     )
-    opt = torch.optim.AdamW(params, lr=train_spec.lr, weight_decay=train_spec.weight_decay)
 
     # Identical data for every arm: same corpus seed, same batch order.
     train_data = make_batches(corpus, train_spec.batch_size, train_spec.steps, train_spec.seed)
     eval_data = make_batches(corpus, train_spec.batch_size, train_spec.eval_batches, 99991)
 
-    base_lrs = [g["lr"] for g in opt.param_groups]
     peak_sources, curve = 0, []
     for step, (tokens, mask) in enumerate(train_data):
         tokens, mask = tokens.to(device), mask.to(device)
-        # Preserve the per-group ratio muP established; the schedule only scales it.
-        schedule = lr_at(step, train_spec) / train_spec.lr
-        for group, base in zip(opt.param_groups, base_lrs, strict=True):
-            group["lr"] = base * schedule
+        for group in opt.param_groups:
+            group["lr"] = lr_at(step, train_spec)
 
         local, recall = losses(model(tokens), tokens, mask)
         (local + recall).backward()
@@ -159,18 +99,6 @@ def train_arm(model_spec: ModelSpec, train_spec: TrainSpec, corpus: CorpusSpec) 
         opt.zero_grad(set_to_none=True)
 
         peak_sources = max(peak_sources, model.peak_live_sources())
-
-        if wb_run:
-            _wandb.log(
-                {
-                    "train/markov_loss": local.item(),
-                    "train/recall_loss": recall.item(),
-                    "train/lr": base_lrs[0] * schedule,
-                    "train/step": step,
-                },
-                step=step,
-            )
-
         if step % max(1, train_spec.steps // 10) == 0:
             curve.append(
                 {
@@ -181,22 +109,10 @@ def train_arm(model_spec: ModelSpec, train_spec: TrainSpec, corpus: CorpusSpec) 
             )
 
     val_local, val_recall = evaluate(model, eval_data, device)
-    metrics = {
-        "val_markov_loss": round(val_local, 4),
+    return {
+        "val_local_loss": round(val_local, 4),
         "val_recall_loss": round(val_recall, 4),
         "n_params": model.n_params(),
         "peak_live_sources": peak_sources,
         "curve": curve,
     }
-
-    if wb_run:
-        _wandb.log(
-            {
-                "val/markov_loss": val_local,
-                "val/recall_loss": val_recall,
-                "val/n_params": model.n_params(),
-                "val/peak_live_sources": peak_sources,
-            }
-        )
-
-    return metrics

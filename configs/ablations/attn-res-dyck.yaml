@@ -3,16 +3,15 @@
 # attn-res-depth could not answer "how much of K3's 2.5x is the depth axis" because its corpus
 # was depth-saturated — an 8x depth increase moved the baseline +0.006, so a depth mechanism
 # could only cost. Two corpus designs later, Dyck clears the gate (dyck-corpus.md): at nesting
-# depth 64 the residual baseline shows real improvement across depths, with a noise floor of
-# 0.085 giving 13:1 resolvable ratio.
+# depth 16 the residual baseline improves 47% from 6 to 48 layers, with a shallow baseline of
+# 0.95 leaving real headroom to measure into.
 #
 # Same arms, same measured quantity — the GAP to residual at matched depth and seed, because
 # absolute loss falls with depth for every arm. What differs is only that the gap is now
 # interpretable: a mechanism that helps has room to show it.
 #
-# Operating point: nesting 64, 2400 steps, seq_len 576. This is the converged budget where
-# the task is hard (1.13 loss vs chance 2.079) but learnable, with a measured noise floor.
-# See dyck-corpus.md for the full characterisation.
+# Read alongside attn-res-depth.md, whose numbers are on the saturated corpus and answer a
+# different (unanswerable) question.
 
 name: attn-res-dyck
 question: How much of the 2.5x is the depth axis, on a corpus where depth pays?
@@ -43,13 +42,13 @@ model:
 corpus:
   type: dyck
   vocab_size: 64
-  seq_len: 576                     # nesting 64 requires this (4 * (2*64+1) = 516, rounded to 576 for chunk alignment)
+  seq_len: 256
   n_types: 8
-  depth: 64                        # the converged operating point: hard, learnable, depth-sensitive
+  depth: 16                        # the gated operating point: hard, learnable, depth-sensitive
   n_groups: 2
 
 train:
-  steps: 2400                      # converged budget — nesting 16 solved at this, nesting 64 has 1.13 loss
+  steps: 600
   batch_size: 16
   lr: 3.0e-4
   schedule: cosine
@@ -64,7 +63,7 @@ metrics:
                                    # which is exactly what made the previous corpus useless.
   also:
     - val_recall_loss              # the close-bracket loss — the depth-requiring half
-    - val_markov_loss
+    - val_local_loss
     - n_params
     - peak_live_sources
 

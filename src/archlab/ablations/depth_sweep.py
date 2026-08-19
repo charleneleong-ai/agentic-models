@@ -23,10 +23,10 @@ from archlab.model import ModelSpec
 BASELINE = "residual"
 
 # Which loss the gap is measured on. The recall corpus put the depth-sensitive signal in
-# `val_markov_loss`; Dyck puts it in `val_recall_loss` (the close brackets) and leaves local as
+# `val_local_loss`; Dyck puts it in `val_recall_loss` (the close brackets) and leaves local as
 # depth-insensitive Markov filler. Getting this wrong measures the wrong quantity, so it is
 # read from the config rather than assumed — and both gaps are recorded either way.
-GAP_METRIC = {"val_markov_loss": "gap_local", "val_recall_loss": "gap_close"}
+GAP_METRIC = {"val_local_loss": "gap_local", "val_recall_loss": "gap_close"}
 
 
 def model_spec_for(
@@ -58,7 +58,7 @@ def run(config_path: Path, out_dir: Path, device: str = "cpu") -> list[dict[str,
     cfg = yaml.safe_load(config_path.read_text())
     t = cfg["train"]
     corpus = build_corpus(cfg["corpus"])
-    primary = cfg.get("metrics", {}).get("gap_on", "val_markov_loss")
+    primary = cfg.get("metrics", {}).get("gap_on", "val_local_loss")
     if primary not in GAP_METRIC:
         raise ValueError(f"metrics.gap_on must be one of {sorted(GAP_METRIC)}, got {primary!r}")
 
@@ -85,9 +85,9 @@ def run(config_path: Path, out_dir: Path, device: str = "cpu") -> list[dict[str,
                     corpus,
                 )
                 if arm["id"] == BASELINE:
-                    baseline = {k: metrics[k] for k in ("val_markov_loss", "val_recall_loss")}
+                    baseline = {k: metrics[k] for k in ("val_local_loss", "val_recall_loss")}
                 gaps = {
-                    "gap_local": round(metrics["val_markov_loss"] - baseline["val_markov_loss"], 4),
+                    "gap_local": round(metrics["val_local_loss"] - baseline["val_local_loss"], 4),
                     "gap_close": round(metrics["val_recall_loss"] - baseline["val_recall_loss"], 4),
                 }
                 gap = gaps[GAP_METRIC[primary]]
@@ -107,7 +107,7 @@ def run(config_path: Path, out_dir: Path, device: str = "cpu") -> list[dict[str,
                 sink.flush()  # a killed sweep must leave usable rows behind
                 print(
                     f"L={n_layers:>2} seed={seed} {arm['id']:>16}  "
-                    f"local={row['val_markov_loss']:.4f} gap={gap:+.4f} "
+                    f"local={row['val_local_loss']:.4f} gap={gap:+.4f} "
                     f"recall={row['val_recall_loss']:.4f} sources={row['peak_live_sources']}"
                 )
 
