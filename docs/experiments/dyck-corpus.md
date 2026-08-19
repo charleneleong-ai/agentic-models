@@ -1,0 +1,193 @@
+# dyck-corpus — the first corpus where depth buys something
+
+**Tooling:** [`archlab gate dyck|dyck-nesting`](../../src/archlab/corpus_gate.py) ·
+**Corpus:** [`DyckSpec`](../../src/archlab/data.py) ·
+**Run:** 2026-08-01, A100, ~1 h across three diagnostics
+
+## Why a third corpus
+
+[`corpus-gate.md`](corpus-gate.md) ended blocked. Two designs had failed the same way, and the
+shared cause was not a parameter but a *shape*: difficulty jumped in a cliff, so there was no
+regime that was hard, learnable and depth-sensitive at once.
+
+| corpus | easy end | hard end | anything between |
+|---|---|---|---|
+| recall | Markov filler, learned in ~2 layers | planted recall, never learned | no |
+| composition | chain_len <= 2, memorized | chain_len >= 4, never learned | no |
+| **Dyck** | nesting 8, solved | nesting 64, at chance | **yes** |
+
+Dyck was chosen for that specific property, not because bracket-matching is intrinsically
+interesting. Nesting depth is a **continuous** dial, and partial credit exists — getting the
+inner brackets right is worth something even when the outer ones are lost — so the loss should
+move smoothly instead of sitting at chance until it collapses.
+
+## The corpus
+
+```
+<mark> ( [ { ... } ] )
+       \____ d opens ____/\____ d closes ____/
+```
+
+Opens are random; the closes are then **fully determined** — close *j* must match open
+*(d-1-j)*. So the target is perfectly predictable in principle, and predicting it requires
+reading the stack in *reverse*, which is the operation that costs depth. A model tracking only
+recent context closes the innermost pairs and guesses the outermost, and
+[`dyck_close_positions`](../../src/archlab/data.py) exposes that per-nesting-level breakdown
+directly.
+
+Tests assert the closes really are the reverse of the opens, that every nesting level is
+represented, and that the outermost bracket type is not guessable from its marginal
+distribution.
+
+## Result 1: depth helps — a first
+
+Nesting depth 8, 600 steps, residual baseline:
+
+| layers | 6 | 12 | 24 | 48 |
+|---|---:|---:|---:|---:|
+| close loss | 0.0686 | 0.0490 | 0.0520 | **0.0197** |
+
+**A 71% reduction from 6 to 48 layers.** Neither prior corpus produced any improvement at all —
+the recall corpus moved +0.006 in the *wrong* direction across the same range.
+
+## Result 2: difficulty degrades smoothly
+
+Nesting depth swept at 6 layers, chance = ln(8) = 2.079:
+
+| nesting | seq_len | close loss | state |
+|---:|---:|---:|---|
+| 8 | 256 | 0.0605 | solved |
+| **16** | 256 | **0.9274** | **partial — the usable band** |
+| 32 | 320 | 1.7103 | mostly failing |
+| 64 | 576 | 2.0238 | at chance |
+
+This is the property the previous corpora lacked. The composition corpus jumped 0.08 -> 2.18
+between chain lengths 2 and 4 with nothing in between; Dyck gives four distinct difficulty
+levels, so an operating point can be *chosen* rather than hoped for.
+
+**Nesting 16 is that point:** a 6-layer baseline at 0.93 leaves ~0.93 of headroom to measure
+into, with chance still a full 1.15 further away.
+
+## A correction to the gate itself
+
+The first Dyck run *failed* its gate — and the gate was wrong, not the corpus. I had used an
+absolute threshold (`deep < shallow - 0.05`) on a task whose entire range is 0-0.07, so a 71%
+reduction missed the bar by 0.001.
+
+Replaced with a relative criterion, plus a third verdict the binary version could not express:
+
+| verdict | meaning | fix |
+|---|---|---|
+| `GATE FAILS` | depth buys < 25% | change the corpus |
+| `GATE PARTIAL` | depth helps, but the shallow baseline is already < 0.2 | raise the difficulty |
+| `GATE PASSES` | depth helps *and* there is headroom to measure it | run the sweep |
+
+Nesting 8 is `GATE PARTIAL`. That is a genuinely different situation from the two earlier
+failures, and the binary gate would have lumped them together and sent me to design corpus #4
+instead of turning one dial.
+
+## Also fixed
+
+- **Corpus sizing ignored a kernel constraint.** KDA requires `seq_len % chunk_size == 0`;
+  `4 * (2*32+1) = 260` is not divisible by 64 and crashed the run. Sequence length now rounds
+  up, and all four nesting settings are checked against both that constraint and the
+  minimum-cells requirement before launching.
+- **A CLI bug that only appeared under `python -m`.** The `gate` command was defined *after*
+  `if __name__ == "__main__": app()`, so running as a module invoked the app before the command
+  existed. It worked through the console entry point, which imports the module first — and the
+  remote box uses `-m`. Both paths are now exercised.
+
+## The operating point I first chose was wrong
+
+Nesting 16 at 600 steps cleared the gate and then failed in the sweep. Two observations killed
+it:
+
+**1. Nominally identical runs disagree by 0.42.** For the same config and seed I recorded
+0.5439 (gate), ~0.78 three times (stability check), and 0.9638 (sweep). Three consecutive runs
+agreeing to 0.04 while the full set spans 0.42 is not iid noise; it points at a systematic
+difference between invocation paths that I have not found. Model spec, train spec, corpus spec
+and eval seeding all match. **Recorded as unresolved rather than explained away** — it is a
+live reason to distrust any single-run number from that regime.
+
+**2. The difficulty was undertraining, not the task.** Repeating one config at three budgets:
+
+| steps | 3 runs, same config and seed | spread |
+|---:|---|---:|
+| 600 | 0.7714, 0.8091, 0.7793 | 0.0377 |
+| 1200 | 0.0370, 0.1277, 0.0250 | 0.1027 |
+| 2400 | 0.0037, 0.0032, 0.0017 | **0.0020** |
+
+At 2400 steps nesting 16 is **solved** — 0.003, with a noise floor of 0.002. So the "hard"
+regime at 600 steps was a model stopped before it converged, and an unconverged model is
+exactly what cannot be measured reliably. Loss near 0.9 looked like headroom; it was a
+half-trained run.
+
+**The rule this yields:** difficulty must come from the *task*, and the budget must reach
+convergence. A gate that only asks "is the loss high?" cannot tell those apart — which is why
+`dyck-stability` (repeat one config) and `dyck-converged` (sweep difficulty at a converged
+budget) now exist alongside it.
+
+## The operating point, characterised
+
+Sweeping nesting depth at a converged budget (2400 steps, 12 layers, each point run twice so
+the noise floor is measured alongside the loss):
+
+| nesting | seq_len | mean | noise floor | floor/mean | usable? |
+|---:|---:|---:|---:|---:|---|
+| 16 | 256 | 0.0018 | 0.0005 | 28% | no — solved, no headroom |
+| 32 | 320 | 0.1826 | 0.1080 | 59% | no — noise dominates |
+| 48 | 448 | 0.7603 | 0.4390 | 58% | no — noise dominates |
+| **64** | 576 | **1.1305** | **0.0849** | **7.5%** | **yes** |
+
+**Relative noise is U-shaped in difficulty, not monotone.** I predicted it would rise with
+difficulty; it does through 32 and 48 and then falls sharply at 64. The middle is the
+*partial-learning* regime, where some runs crack the task and some do not, so variance is
+maximal. At nesting 64 every run fails the same way — unsolved (1.13 against chance 2.079, so
+real learning is still happening) and reproducible.
+
+That gives a usable operating point for the first time: **nesting 64 at 2400 steps**, 1.13 of
+headroom against a 0.085 floor, a 13:1 ratio.
+
+The lesson generalises past this corpus. A difficulty dial has three regimes — solved, partial,
+saturated-but-learning — and only the first and third are measurable. Picking "as hard as
+possible while still learning" lands in the partial regime, which is exactly the worst place to
+measure from. That is the mistake nesting 16 at 600 steps made in a different disguise.
+
+## Cost, and why the sweep is not launched
+
+Nesting 64 needs `seq_len` 576 and 4x the step budget: roughly **9x per run** against the
+original config, extrapolating to **10-18 GPU-hours** for a 24-run depth sweep. Cheaper designs
+exist and trade different things:
+
+- depths {6, 48} only — halves the runs, loses the shape of the curve
+- `seq_len` 320 rather than 576 — the `4 x width` padding was arbitrary; two groups need only
+  258, which is ~1.8x cheaper
+- fewer arms, or fewer seeds — but seeds are what the noise floor argues *for*
+
+Which trade is right is a budget decision, so the sweep is left un-launched rather than
+started unilaterally.
+
+## What this unblocks
+
+The depth sweep that has been blocked since [`attn-res-depth`](attn-res-depth.md). Re-running
+the AttnRes arms on Dyck at nesting 16 finally asks the original question — *how much of K3's
+2.5x is the depth axis* — on a corpus where depth demonstrably matters.
+
+The caveat that survives: this is bracket matching, not language. Depth helping here does not
+mean AttnRes's benefit at 93 layers on real text will look the same. What it does give is a
+setting where the *absence* of a depth effect would be informative, which is precisely what
+`attn-res-depth` could not offer.
+
+## Next
+
+1. **Decide the budget.** Nesting 64 / 2400 steps is characterised and ready; the full sweep is
+   10-18 GPU-hours, and the cheaper variants above trade coverage for cost.
+2. Re-run the AttnRes depth sweep there. The noise floor is now known *before* the comparison,
+   so the resolvable effect size is known too — 0.085, which is smaller than every AttnRes gap
+   observed on the previous corpus.
+3. Resolve the 0.42 cross-invocation discrepancy. The converged floor of 0.0005 suggests it is
+   confined to the unconverged regime, which would make it moot at the new operating point —
+   but that is a hypothesis, not a finding.
+4. `kda-state-capacity` may also be unblocked — a fixed recurrent state has to hold the bracket
+   stack, and nesting depth is a direct dial on how much state that requires. It now has a
+   validated corpus *and* a measured noise floor to work against.

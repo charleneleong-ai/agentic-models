@@ -14,7 +14,14 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from archlab.data import ChainSpec, CorpusSpec, batches, chain_batches
+from archlab.data import (
+    ChainSpec,
+    CorpusSpec,
+    DyckSpec,
+    batches,
+    chain_batches,
+    dyck_batches,
+)
 from archlab.model import ModelSpec, NanoLM, losses
 
 
@@ -30,13 +37,15 @@ class TrainSpec:
     device: str = "cpu"
 
 
-Corpus = CorpusSpec | ChainSpec
+Corpus = CorpusSpec | ChainSpec | DyckSpec
 
 
 def make_batches(
     corpus: Corpus, batch_size: int, n_batches: int, seed: int
 ) -> list[tuple[Tensor, Tensor]]:
     """Dispatch on corpus type. Both yield (tokens, target_mask) so the loop is agnostic."""
+    if isinstance(corpus, DyckSpec):
+        return dyck_batches(corpus, batch_size, n_batches, seed)
     if isinstance(corpus, ChainSpec):
         return chain_batches(corpus, batch_size, n_batches, seed)
     return batches(corpus, batch_size, n_batches, seed)

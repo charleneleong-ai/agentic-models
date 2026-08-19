@@ -23,10 +23,11 @@ from __future__ import annotations
 import math
 
 from archlab.ablations.train import TrainSpec, train_arm
-from archlab.data import ChainSpec
+from archlab.data import ChainSpec, DyckSpec
 from archlab.model import ModelSpec
 
 D_MODEL, N_HEADS, D_HEAD, D_HIDDEN = 128, 4, 32, 512
+CHUNK_SIZE = 64  # KDA constraint: every corpus seq_len must be a multiple of this
 
 
 def spec_for(n_layers: int, vocab_size: int) -> ModelSpec:
@@ -99,3 +100,120 @@ def depth_at_the_cliff(chain_len: int, steps: int) -> None:
         if deep < shallow - 0.20
         else "GATE FAILS — depth does not move the boundary"
     )
+
+
+def dyck_depth_gate(depth: int = 8, steps: int = 600) -> None:
+    """The gate for the Dyck corpus: does adding layers help predict nested closes?
+
+    Same bar as before — a corpus is only usable for a depth ablation if plain depth buys
+    something on it. Two prior designs failed here, so this runs before any sweep.
+    """
+    corpus = DyckSpec(vocab_size=64, seq_len=256, n_types=8, depth=depth, n_groups=2)
+    print(f"=== Dyck depth gate (nesting depth={depth}, {steps} steps) ===")
+    print(f"chance = ln({corpus.n_types}) = {math.log(corpus.n_types):.3f}; solved approaches 0\n")
+    print(f"{'layers':>7} {'close':>9} {'local':>9}")
+
+    scores = {}
+    for n_layers in (6, 12, 24, 48):
+        m = run_one(n_layers, corpus, steps)
+        scores[n_layers] = m["val_recall_loss"]
+        print(f"{n_layers:>7} {scores[n_layers]:>9.4f} {m['val_local_loss']:>9.4f}", flush=True)
+
+    shallow, deep = scores[6], scores[48]
+    # Relative, not absolute. An absolute bar is wrong for a task whose whole range is small:
+    # the first Dyck run cut loss 0.0686 -> 0.0197, a 71% reduction, and still missed a -0.05
+    # absolute threshold by 0.001. What matters is whether depth buys a meaningful *fraction*
+    # of the available headroom, and separately whether enough headroom exists to measure with.
+    reduction = (shallow - deep) / max(shallow, 1e-9)
+    print(f"\n6 -> 48 layers: close {deep - shallow:+.4f}  ({reduction:.0%} reduction)")
+    if reduction < 0.25:
+        print("GATE FAILS — depth does not meaningfully help")
+    elif shallow < 0.2:
+        print(
+            f"GATE PARTIAL — depth helps ({reduction:.0%}) but the shallow baseline is already "
+            f"at {shallow:.3f}; too little headroom for a clean ablation. Raise nesting depth."
+        )
+    else:
+        print("GATE PASSES — depth helps and there is headroom to measure it")
+
+
+def dyck_nesting_envelope(steps: int = 600, n_layers: int = 6) -> None:
+    """Sweep *nesting* depth at fixed model depth to locate the hard-but-learnable band.
+
+    The first Dyck gate showed nesting depth 8 is nearly solved by 6 layers (close loss 0.07
+    against chance 2.08). That is the opposite failure to the composition corpus — learnable,
+    but too easy for depth to matter. A depth ablation needs a nesting depth that a shallow
+    model cannot handle, so find where accuracy starts to fall before sweeping model depth.
+
+    Unlike the composition corpus this should degrade *smoothly*: partial credit is available,
+    since getting the inner brackets right is worth something even when the outer ones are lost.
+    """
+    print(f"=== Dyck nesting envelope ({n_layers} layers, {steps} steps) ===")
+    print(f"chance = ln(8) = {math.log(8):.3f}; solved approaches 0\n")
+    print(f"{'nesting':>8} {'seq_len':>8} {'close':>9} {'local':>9}")
+    for depth in (8, 16, 32, 64):
+        # KDA requires seq_len % chunk_size == 0, so round up rather than take the raw width
+        # multiple — 4 * (2*32+1) = 260 is not divisible by 64 and crashes the kernel.
+        raw = max(256, 4 * (2 * depth + 1))
+        seq_len = -(-raw // CHUNK_SIZE) * CHUNK_SIZE
+        corpus = DyckSpec(vocab_size=64, seq_len=seq_len, n_types=8, depth=depth, n_groups=2)
+        m = run_one(n_layers, corpus, steps)
+        print(
+            f"{depth:>8} {seq_len:>8} {m['val_recall_loss']:>9.4f} {m['val_local_loss']:>9.4f}",
+            flush=True,
+        )
+
+
+def dyck_stability(depth: int = 16, repeats: int = 3) -> None:
+    """Is this operating point reproducible at all? Run the *same* config repeatedly.
+
+    The first Dyck sweep found a 0.42 swing between two runs of identical config and seed —
+    pure CUDA nondeterminism, not seed variance. That is the signature of an operating point
+    sitting on the learnability edge, where tiny numerical differences flip whether the model
+    cracks the task. No arm comparison survives that.
+
+    Sweeping the step budget asks whether the instability is a convergence artifact (longer
+    training settles it) or intrinsic to the difficulty (it does not). Fixed seed throughout,
+    so any spread here is nondeterminism alone — a floor under every gap this corpus can
+    resolve.
+    """
+    corpus = DyckSpec(vocab_size=64, seq_len=256, n_types=8, depth=depth, n_groups=2)
+    print(f"=== Dyck stability at nesting {depth} (residual, 12 layers, seed 0 throughout) ===")
+    print(f"chance = {math.log(corpus.n_types):.3f}\n")
+    print(f"{'steps':>7} {'runs':>28} {'spread':>8}")
+
+    for steps in (600, 1200, 2400):
+        vals = [run_one(12, corpus, steps)["val_recall_loss"] for _ in range(repeats)]
+        spread = max(vals) - min(vals)
+        print(f"{steps:>7} {' '.join(f'{v:.4f}' for v in vals):>28} {spread:>8.4f}", flush=True)
+
+    print("\nSpread here is the noise floor: no arm gap smaller than this is measurable.")
+
+
+def dyck_converged_envelope(steps: int = 2400, repeats: int = 2) -> None:
+    """Find a nesting depth that is hard *at convergence*, not hard because training stopped.
+
+    The stability check showed nesting 16 solves to 0.003 with a 0.002 noise floor at 2400
+    steps, while at 600 steps it sits near 0.78 — so the difficulty at 600 steps was
+    undertraining, and an undertrained model is precisely what cannot be measured reliably.
+
+    Difficulty has to come from the task. This sweeps nesting depth at a converged budget and
+    repeats each point, so both the loss and its noise floor are known before any arm is
+    compared against it. A usable operating point needs loss well above the floor *and* a floor
+    well below the effects worth detecting.
+    """
+    print(f"=== Dyck converged envelope ({steps} steps, 12 layers, {repeats}x each) ===")
+    print(f"chance = ln(8) = {math.log(8):.3f}\n")
+    print(f"{'nesting':>8} {'seq_len':>8} {'runs':>20} {'mean':>8} {'floor':>8}")
+    for depth in (16, 32, 48, 64):
+        raw = max(256, 4 * (2 * depth + 1))
+        seq_len = -(-raw // CHUNK_SIZE) * CHUNK_SIZE
+        corpus = DyckSpec(vocab_size=64, seq_len=seq_len, n_types=8, depth=depth, n_groups=2)
+        vals = [run_one(12, corpus, steps)["val_recall_loss"] for _ in range(repeats)]
+        mean = sum(vals) / len(vals)
+        print(
+            f"{depth:>8} {seq_len:>8} {' '.join(f'{v:.4f}' for v in vals):>20} "
+            f"{mean:>8.4f} {max(vals) - min(vals):>8.4f}",
+            flush=True,
+        )
+    print("\nWant: mean well above the floor, floor well below the gaps worth detecting.")
