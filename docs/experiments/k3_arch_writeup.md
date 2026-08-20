@@ -77,13 +77,24 @@ AttnRes helps at 12 layers (-0.40 gap) but catastrophically fails at 48 layers (
 - Layers: 0.003-0.007 (100x smaller)
 - Head: 1.53-1.54
 
-**Verdict:** AttnRes fails at depth due to vanishing gradients in middle layers.
+**Gradient norms (48 layers):**
+- Embed: 0.013-0.025
+- Layers: 0.00088-0.00227 (4-10x smaller than 24L)
+- Head: 2.97-3.03
+
+**Verdict:** AttnRes fails at depth due to vanishing gradients in middle layers. Vanishing worsens with depth — 48L layer gradients are 4-10x smaller than 24L.
 
 ![Chain Cliff + Gradient](https://github.com/charleneleong-ai/agentic-models/blob/main/assets/chain_cliff_gradient.png?raw=true)
 
 **Left:** Chain length cliff (solved at len<=2, chance at len>=3).
 
 **Right:** Gradient profiling at 24 layers — embed=0.05-0.06, layers=0.003-0.007, head=1.53-1.54.
+
+![Chain Cliff + Gradient 48L](https://github.com/charleneleong-ai/agentic-models/blob/main/assets/chain_cliff_gradient_48l.png?raw=true)
+
+**Left:** Chain length cliff (solved at len<=2, chance at len>=3).
+
+**Right:** Gradient profiling at 48 layers — embed=0.013-0.025, layers=0.00088-0.00227, head=2.97-3.03.
 
 ### 4. Permutation Composition Cliff: New Finding (6 runs)
 
