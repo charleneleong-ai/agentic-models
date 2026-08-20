@@ -64,13 +64,18 @@ KDA does not cause laziness at nano scale. Recall deltas are within noise across
 
 ### 3. AttnRes Depth: Negative at Nano Scale (24 runs)
 
-AttnRes helps at 12 layers (-0.40 gap) but catastrophically fails at 48 layers (+1.46). Gradient profiling at 24 layers reveals why: layer gradients are 100x smaller than embed/head gradients (vanishing in middle layers).
+AttnRes helps at 12 layers (-0.40 gap) but catastrophically fails at 48 layers (+1.46) when undertrained (200 steps). At convergence (2400 steps), all arms converge to ~2.71 local, ~3.82 recall — within noise.
 
-| Depth | AttnRes-full | Baseline | Gap |
-|-------|--------------|----------|-----|
-| 12 | 2.58 | 2.98 | -0.40 |
-| 24 | 2.72 | 2.72 | 0.00 |
-| 48 | 4.18 | 2.72 | +1.46 |
+| Depth | Mixing | Blocks | Local Loss | Recall |
+|-------|--------|--------|------------|--------|
+| 24L | residual | 1 | 2.7079 | 3.8185 |
+| 24L | block | 4 | 2.7075 | 3.8125 |
+| 24L | block | 8 | 2.6971 | 3.8168 |
+| 24L | full | 1 | 2.7013 | 3.8163 |
+| 48L | residual | 1 | 2.7086 | 3.8182 |
+| 48L | block | 4 | 2.7077 | 3.8167 |
+| 48L | block | 8 | 2.7065 | 3.8143 |
+| 48L | full | 1 | 2.7056 | 3.8206 |
 
 **Gradient norms (24 layers):**
 - Embed: 0.05-0.06
@@ -82,7 +87,7 @@ AttnRes helps at 12 layers (-0.40 gap) but catastrophically fails at 48 layers (
 - Layers: 0.00088-0.00227 (4-10x smaller than 24L)
 - Head: 2.97-3.03
 
-**Verdict:** AttnRes fails at depth due to vanishing gradients in middle layers. Vanishing worsens with depth — 48L layer gradients are 4-10x smaller than 24L.
+**Verdict:** AttnRes doesn't help at nano scale, but also doesn't hurt at convergence. The earlier +1.46 gap was an undertraining artifact (200 steps vs 2400 steps). Vanishing gradients exist but don't prevent convergence.
 
 ![Chain Cliff + Gradient](https://github.com/charleneleong-ai/agentic-models/blob/main/assets/chain_cliff_gradient.png?raw=true)
 
