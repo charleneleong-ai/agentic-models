@@ -1,5 +1,11 @@
 # Core Architectural Enablers for Agentic Reasoning
 
+**Date:** August 23, 2026
+**Author:** archlab team
+**Status:** Current as of audit date
+
+---
+
 ## What Makes a Raw LLM "Agentic"?
 
 A raw LLM predicts the next token. An agentic LLM:
