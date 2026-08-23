@@ -1,7 +1,7 @@
 # Core Architectural Enablers for Agentic Reasoning
 
 **Date:** August 23, 2026
-**Author:** archlab team
+**Author:** charleneleong-ai
 **Status:** Current as of audit date
 
 ---
