@@ -1,0 +1,19 @@
+{
+  "scale_test": {
+    "depth16_all-mla": {"val_local": 2.9867, "val_recall": 0.0011, "depth": 16, "arm": "all-mla"},
+    "depth16_kda-3-1": {"val_local": 2.9948, "val_recall": 0.0006, "depth": 16, "arm": "kda-3-1"},
+    "depth16_kda-7-1": {"val_local": 2.9947, "val_recall": 0.0015, "depth": 16, "arm": "kda-7-1"},
+    "depth16_all-kda": {"val_local": 2.9949, "val_recall": 0.0012, "depth": 16, "arm": "all-kda"},
+    "depth16_attnres-full": {"val_local": 2.9868, "val_recall": 0.0015, "depth": 16, "arm": "attnres-full"},
+    "depth16_attnres-block-4": {"val_local": 2.9878, "val_recall": 0.0010, "depth": 16, "arm": "attnres-block-4"},
+    "depth32_all-mla": {"val_local": 2.7827, "val_recall": 0.0016, "depth": 32, "arm": "all-mla"},
+    "depth32_kda-3-1": {"val_local": 2.7825, "val_recall": 0.0037, "depth": 32, "arm": "kda-3-1"},
+    "depth32_kda-7-1": {"val_local": 2.7833, "val_recall": 0.0026, "depth": 32, "arm": "kda-7-1"},
+    "depth32_all-kda": {"val_local": 2.7912, "val_recall": 0.0341, "depth": 32, "arm": "all-kda"},
+    "depth32_attnres-full": {"val_local": 2.7772, "val_recall": 0.0027, "depth": 32, "arm": "attnres-full"},
+    "depth32_attnres-block-4": {"val_local": 2.7776, "val_recall": 0.0018, "depth": 32, "arm": "attnres-block-4"},
+    "depth64_all-kda": {"val_local": 2.8002, "val_recall": 0.3600, "depth": 64, "arm": "all-kda"},
+    "depth64_attnres-full": {"val_local": 2.7981, "val_recall": 0.1406, "depth": 64, "arm": "attnres-full"},
+    "depth64_attnres-block-4": {"val_local": 2.7924, "val_recall": 0.0518, "depth": 64, "arm": "attnres-block-4"}
+  }
+}
