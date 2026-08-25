@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 
 from archlab import corpus_gate
-from archlab.ablations import activation_bound, attn_res, depth_sweep, qb_scale
+from archlab.ablations import activation_bound, attn_res, depth_sweep, qb_scale, scale_test
 
 app = typer.Typer(add_completion=False, help=__doc__)
 
@@ -18,6 +18,7 @@ RUNNERS = {
     "attn-res-depth": depth_sweep.run,
     "activation-bound": activation_bound.run,
     "attn-res-dyck": depth_sweep.run,
+    "scale-test": scale_test.run,
 }
 
 

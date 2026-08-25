@@ -1,0 +1,32 @@
+# State compression limit: how much can we compress state before recall degrades?
+
+name: state-compression
+question: What is the minimum state size that maintains competitive recall?
+primitive: archlab.attention.kda
+requires_training: true
+
+model:
+  vocab_size: 64
+  d_model: 256
+  n_layers: 12
+  n_heads: 4
+  d_hidden: 1024
+  attention: [kda]
+
+train:
+  steps: 2400
+  lr: 3e-4
+  batch_size: 8
+  seq_len: 256
+
+sweep:
+  d_head: [8, 16, 32, 64, 128]
+
+arms:
+  - id: kda-only
+    pattern: [kda]
+
+  - id: kda-3-1
+    pattern: [kda, kda, kda, mla]
+
+report: docs/experiments/state-compression.md
