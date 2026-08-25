@@ -1,0 +1,10 @@
+{"d_head": 8, "arm": "kda-only", "state_kb": 0.25, "params_m": 10.040592, "val_local": 2.530325412750244, "val_recall": 1.6066980361938477}
+{"d_head": 8, "arm": "kda-3-1", "state_kb": 0.25, "params_m": 10.0347, "val_local": 2.5151116847991943, "val_recall": 1.5789508819580078}
+{"d_head": 16, "arm": "kda-only", "state_kb": 1.0, "params_m": 10.543344, "val_local": 2.5113587379455566, "val_recall": 1.298017978668213}
+{"d_head": 16, "arm": "kda-3-1", "state_kb": 1.0, "params_m": 10.49778, "val_local": 2.5175745487213135, "val_recall": 1.0515484809875488}
+{"d_head": 32, "arm": "kda-only", "state_kb": 4.0, "params_m": 11.548848, "val_local": 2.508289098739624, "val_recall": 0.9052037000656128}
+{"d_head": 32, "arm": "kda-3-1", "state_kb": 4.0, "params_m": 11.42394, "val_local": 2.5047240257263184, "val_recall": 0.6766242980957031}
+{"d_head": 64, "arm": "kda-only", "state_kb": 16.0, "params_m": 13.559856, "val_local": 2.503602981567383, "val_recall": 0.40880700945854187}
+{"d_head": 64, "arm": "kda-3-1", "state_kb": 16.0, "params_m": 13.27626, "val_local": 2.505316972732544, "val_recall": 0.3725435435771942}
+{"d_head": 128, "arm": "kda-only", "state_kb": 64.0, "params_m": 17.581872, "val_local": 2.4997565746307373, "val_recall": 0.05414104461669922}
+{"d_head": 128, "arm": "kda-3-1", "state_kb": 64.0, "params_m": 16.9809, "val_local": 2.4977498054504395, "val_recall": 0.06125583499670029}
